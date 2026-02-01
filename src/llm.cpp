@@ -7,6 +7,7 @@
 #endif
 
 #include <sys/stat.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -69,16 +70,95 @@ static time_t parse_token_expiration(const std::string& copilot_token) {
   }
 }
 
-// Get path to credentials file
-static std::string get_auth_file_path() {
+// Get base directory for builtin files
+static std::string get_llm_dir_path() {
   const char *home = getenv("HOME");
   if (!home) {
     home = "/root";
   }
-  return std::string(home) + "/.copilot_auth";
+  return std::string(home) + "/.bash_llm";
 }
 
-// Load credentials from ~/.copilot_auth
+// Get path to credentials file
+static std::string get_auth_file_path() {
+  return get_llm_dir_path() + "/copilot_auth.json";
+}
+
+// Get path to custom instructions file
+static std::string get_instructions_file_path() {
+  return get_llm_dir_path() + "/instructions.txt";
+}
+
+// Ensure custom instructions file exists with defaults
+static void ensure_instructions_file() {
+  std::string instructions_dir = get_llm_dir_path();
+  std::string instructions_file = get_instructions_file_path();
+
+  if (mkdir(instructions_dir.c_str(), 0700) != 0 && errno != EEXIST) {
+    fprintf(stderr, "Warning: Cannot create directory %s\n", instructions_dir.c_str());
+    return;
+  }
+
+  std::ifstream existing(instructions_file);
+  if (existing.is_open()) {
+    existing.close();
+    return;
+  }
+
+  std::ofstream file(instructions_file);
+  if (!file.is_open()) {
+    fprintf(stderr, "Warning: Cannot write to %s\n", instructions_file.c_str());
+    return;
+  }
+
+  file << "# Custom instructions for llm builtin\n";
+  file << "# Edit this file to change default behavior for all chats.\n";
+  file << "# Lines starting with # are comments.\n";
+  file << "\n";
+  file << "You are a bash/shell scripting expert assistant.\n";
+  file << "The user is interacting with you from a command-line terminal.\n";
+  file << "\n";
+  file << "Response guidelines:\n";
+  file << "- Provide concise, actionable answers optimized for terminal viewing\n";
+  file << "- For commands: give working examples with brief explanations\n";
+  file << "- Use plain text formatting (no markdown code blocks with ```)\n";
+  file << "- Prefer one-liners and pipelines when appropriate\n";
+  file << "- Include safety warnings for destructive operations\n";
+  file << "- Assume Linux/Unix environment unless specified otherwise\n";
+  file.close();
+
+  chmod(instructions_file.c_str(), 0600);
+}
+
+static std::string trim_whitespace(const std::string& input) {
+  size_t start = input.find_first_not_of(" \t\n\r");
+  if (start == std::string::npos) {
+    return "";
+  }
+  size_t end = input.find_last_not_of(" \t\n\r");
+  return input.substr(start, end - start + 1);
+}
+
+static std::string load_instructions() {
+  std::string instructions_file = get_instructions_file_path();
+  std::ifstream file(instructions_file);
+  if (!file.is_open()) {
+    return "";
+  }
+
+  std::ostringstream ss;
+  std::string line;
+  while (std::getline(file, line)) {
+    if (!line.empty() && line[0] == '#') {
+      continue;
+    }
+    ss << line << "\n";
+  }
+
+  return trim_whitespace(ss.str());
+}
+
+// Load credentials from ~/.bash_llm/copilot_auth.json
 static bool load_credentials(std::string& copilot_token, std::string& access_token, time_t& expires_at) {
   std::string auth_file = get_auth_file_path();
   std::ifstream file(auth_file);
@@ -114,9 +194,14 @@ static bool load_credentials(std::string& copilot_token, std::string& access_tok
   }
 }
 
-// Save credentials to ~/.copilot_auth
+// Save credentials to ~/.bash_llm/copilot_auth.json
 static bool save_credentials(const std::string& copilot_token, const std::string& access_token, time_t expires_at) {
   std::string auth_file = get_auth_file_path();
+
+  if (mkdir(get_llm_dir_path().c_str(), 0700) != 0 && errno != EEXIST) {
+    fprintf(stderr, "Error: Cannot create directory %s\n", get_llm_dir_path().c_str());
+    return false;
+  }
   
   json auth_data = {
     {"copilot_token", copilot_token},
@@ -444,11 +529,9 @@ static bool get_copilot_token(std::string& copilot_token) {
     }
     
     // Token expired or expiring soon, refresh it
-    fprintf(stderr, "Refreshing expired Copilot token...\n");
     if (refresh_copilot_token(copilot_token, access_token, expires_at)) {
       return true;
     } else {
-      fprintf(stderr, "Token refresh failed, re-authenticating...\n");
       if (authenticate_with_github(copilot_token, access_token, expires_at)) {
         return save_credentials(copilot_token, access_token, expires_at);
       }
@@ -463,7 +546,7 @@ static bool get_copilot_token(std::string& copilot_token) {
   if (authenticate_with_github(copilot_token, access_token, expires_at)) {
     fprintf(stderr, "[Step 4/4] Saving credentials...\n");
     if (save_credentials(copilot_token, access_token, expires_at)) {
-      fprintf(stderr, "✓ Credentials saved to ~/.copilot_auth\n\n");
+      fprintf(stderr, "✓ Credentials saved to ~/.bash_llm/copilot_auth.json\n\n");
       return true;
     }
   }
@@ -526,6 +609,13 @@ static int send_chat_message(const std::string& message) {
   
   // Build JSON payload using nlohmann/json
   json messages = json::array();
+  std::string instructions = load_instructions();
+  if (!instructions.empty()) {
+    messages.push_back({
+      {"role", "system"},
+      {"content", instructions}
+    });
+  }
   for (const auto& msg : g_chat_history) {
     messages.push_back(msg);
   }
@@ -652,6 +742,13 @@ static int interactive_chat() {
 int
 llm_builtin (WORD_LIST *list)
 {
+  // Ensure instructions file exists on first use
+  static bool first_run = true;
+  if (first_run) {
+    ensure_instructions_file();
+    first_run = false;
+  }
+
   int opt;
   int interactive = 0;
   int new_chat = 0;
@@ -707,6 +804,7 @@ int
 llm_builtin_load (char *s)
 {
   curl_global_init(CURL_GLOBAL_DEFAULT);
+  ensure_instructions_file();
   return (1);
 }
 

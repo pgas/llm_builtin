@@ -7,8 +7,8 @@
 enable -f "$(dirname "$0")/build/src/llm.so" llm
 
 # 2. Check if credentials are set up
-if [ ! -f ~/.copilot_auth ]; then
-    echo "Error: Credentials not found at ~/.copilot_auth"
+if [ ! -f ~/.bash_llm/copilot_auth.json ]; then
+    echo "Error: Credentials not found at ~/.bash_llm/copilot_auth.json"
     echo "Please run: bash get_token.sh"
     exit 1
 fi

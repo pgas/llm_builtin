@@ -44,6 +44,11 @@ Examples:
   llm What is the capital of France?
   llm Explain what this bash command does: find . -name "*.txt"
   llm -i    # Start interactive chat
+
+## Custom Instructions
+
+On load, the builtin ensures a custom instructions file exists at `~/.bash_llm/instructions.txt`.
+Edit this file to set default guidance applied to every chat request.
 ```
 
 ## Requirements

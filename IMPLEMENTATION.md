@@ -40,7 +40,7 @@ A bash loadable builtin (`llm`) that provides chat functionality with GitHub Cop
 
 ## How It Works
 
-1. **Credential Storage**: Credentials saved to `~/.copilot_auth` (JSON format, 600 permissions)
+1. **Credential Storage**: Credentials saved to `~/.bash_llm/copilot_auth.json` (JSON format, 600 permissions)
 2. **Token Management**: Automatically loads and refreshes tokens as needed
 3. **API Communication**: Makes HTTPS requests to `api.githubcopilot.com/chat/completions`
 4. **Request Format**: Sends JSON with user message and model specification (using nlohmann/json)
@@ -114,7 +114,7 @@ You: exit
 
 ## Security Considerations
 
-1. Credentials stored in `~/.copilot_auth` with secure permissions (600)
+1. Credentials stored in `~/.bash_llm/copilot_auth.json` with secure permissions (600)
 2. Access token stored locally (never transmitted in requests except to GitHub API)
 3. SSL/TLS verification enabled (CURLOPT_SSL_VERIFYPEER=1)
 4. No token logging or printing to console
