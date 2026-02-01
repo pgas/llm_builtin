@@ -601,9 +601,6 @@ static int interactive_chat() {
   const char *bold = "\033[1m";
   const char *reset = "\033[0m";
 
-  printf("%sCommands: %s/help%s, %s/new%s, %s/exit%s, %s/quit%s%s\n\n",
-      yellow, bold, reset, bold, reset, bold, reset, bold, reset, reset);
-  
   char buffer[4096];
   while (true) {
     printf("%s%s> %s", green, bold, reset);
@@ -643,14 +640,10 @@ static int interactive_chat() {
       continue;
     }
     
-    printf("\n%s%sCopilot%s > %s", cyan, bold, reset, reset);
-    fflush(stdout);
-    
+    printf("\n");
     if (send_chat_message(message) != EXECUTION_SUCCESS) {
       fprintf(stderr, "Failed to send message\n");
     }
-    
-    printf("\n");
   }
   
   return EXECUTION_SUCCESS;
