@@ -1,0 +1,43 @@
+# Add to ~/.bashrc for permanent LLM builtin availability
+
+# GitHub Copilot Token
+# Get your token from VS Code or using the get_token.sh script
+export GITHUB_COPILOT_TOKEN='your_token_here'
+
+# Load the LLM builtin
+# Update the path to match where you built the project
+enable -f /home/pgas/proj/llm_builtin/build/src/llm.so llm
+
+# Optional: Create an alias for interactive mode
+alias llmi='llm -i'
+
+# Optional: Helper function to ask llm about command history
+# Usage: explain_last_command
+explain_last_command() {
+    local last_cmd=$(history 2 | head -1 | sed 's/^[ ]*[0-9]*[ ]*//')
+    llm "Explain this command: $last_cmd"
+}
+
+# Optional: Helper to get command suggestions
+# Usage: suggest "find files modified today"
+suggest() {
+    llm "Suggest a bash command to: $*"
+}
+
+# Optional: Debug helper - explain errors
+# Usage: debug_error "error message here"
+debug_error() {
+    llm "I got this error in bash, what does it mean and how do I fix it: $*"
+}
+
+# Optional: Code review helper
+# Usage: review_file filename.sh
+review_file() {
+    if [ -f "$1" ]; then
+        llm "Review this bash script and suggest improvements: $(cat "$1")"
+    else
+        echo "File not found: $1"
+    fi
+}
+
+echo "LLM builtin loaded! Try: llm 'Hello, world!'"
