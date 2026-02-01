@@ -27,6 +27,7 @@ extern "C" {
 #include "shell.h"
 #include "bashgetopt.h"
 #include "common.h"
+extern char* ttyname(int fd);
 }
 
 // Structure to hold response data from curl
@@ -684,20 +685,22 @@ static int send_chat_message(const std::string& message) {
 }
 
 // Interactive chat mode
-static int interactive_chat() {
+static int interactive_chat(bool is_tty) {
   const char *cyan = "\033[36m";
   const char *green = "\033[32m";
   const char *yellow = "\033[33m";
   const char *bold = "\033[1m";
   const char *reset = "\033[0m";
 
+  FILE *input = fopen("/dev/stdin", "r");
+
   char buffer[4096];
   while (true) {
+  
     printf("%s%s> %s", green, bold, reset);
     fflush(stdout);
     
-    if (!fgets(buffer, sizeof(buffer), stdin)) {
-      printf("\n");
+    if (!fgets(buffer, sizeof(buffer), input)) {
       break;
     }
     
@@ -711,16 +714,17 @@ static int interactive_chat() {
       continue;
     }
     
+    // Only process commands if connected to a tty
     if (message == "/exit" || message == "/quit") {
       break;
     }
-
+    
     if (message == "/new") {
       g_chat_history.clear();
       printf("%s%sNew chat started.%s\n\n", yellow, bold, reset);
       continue;
     }
-
+    
     if (message == "/help") {
       printf("%s%sCommands%s\n", bold, cyan, reset);
       printf("  %s/help%s   Show this help\n", bold, reset);
@@ -730,12 +734,36 @@ static int interactive_chat() {
       continue;
     }
     
-    printf("\n");
+    // Send message and wait for response before processing next line
     if (send_chat_message(message) != EXECUTION_SUCCESS) {
       fprintf(stderr, "Failed to send message\n");
+      // Continue processing remaining lines even on error
     }
   }
   
+  if (input != stdin) {
+    fclose(input);
+  }
+
+  return EXECUTION_SUCCESS;
+}
+
+// Non-tty interactive mode: read each stdin line as a prompt
+static int interactive_chat_pipe() {
+  char buffer[4096];
+  FILE *input = fopen("/dev/stdin", "r");
+  while (fgets(buffer, sizeof(buffer), input)) {
+    std::string message = trim_whitespace(std::string(buffer));
+    if (message.empty()) {
+      continue;
+    }
+    // Send message and wait for response before processing next line
+    if (send_chat_message(message) != EXECUTION_SUCCESS) {
+      fprintf(stderr, "Failed to send message\n");
+      // Continue processing remaining lines even on error
+    }
+  }
+
   return EXECUTION_SUCCESS;
 }
 
@@ -749,6 +777,9 @@ llm_builtin (WORD_LIST *list)
     first_run = false;
   }
 
+  // Check if stdin is connected to a tty
+  // If so, automatically enable interactive mode
+  int is_tty = ttyname(0) != nullptr ? 1 : 0;
   int opt;
   int interactive = 0;
   int new_chat = 0;
@@ -776,16 +807,14 @@ llm_builtin (WORD_LIST *list)
     g_chat_history.clear();
   }
   
+  if (is_tty && (interactive || list == nullptr)) {
+       return interactive_chat(true);
+  }
   if (interactive) {
-    return interactive_chat();
+    return interactive_chat_pipe();
   }
   
   // Collect all arguments as the message
-  if (!list) {
-    fprintf(stderr, "Error: Please provide a message or use -i for interactive mode\n");
-    return EX_USAGE;
-  }
-  
   std::stringstream ss;
   while (list) {
     ss << list->word->word;
@@ -795,6 +824,16 @@ llm_builtin (WORD_LIST *list)
     }
   }
   
+  // add input to the prompt
+  if (!is_tty){
+    FILE * input = fopen("/dev/stdin", "r");
+    char buffer[4096];
+    while (fgets(buffer, sizeof(buffer), input)) {
+      ss << "\n" << buffer;
+    }
+    fclose(input);
+  }
+
   message = ss.str();
   
   return send_chat_message(message);

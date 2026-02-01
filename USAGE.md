@@ -129,6 +129,23 @@ Copilot: [Response from Copilot]
 You: exit
 ```
 
+#### Interactive Mode with Piped Input
+
+When using `-i` with piped input (non-TTY), each line from stdin is treated as a separate prompt:
+
+```bash
+# Process multiple prompts from a file
+cat prompts.txt | llm -i
+
+# Or from a heredoc
+llm -i <<EOF
+What is Python?
+What is JavaScript?
+EOF
+```
+
+Each line will be sent as a separate message and the response will be displayed before processing the next line.
+
 ## Examples
 
 ```bash
@@ -143,6 +160,16 @@ llm Write a Python function to calculate fibonacci numbers
 
 # Interactive mode for longer conversations
 llm -i
+
+# Pipe stdin to add context to your message
+cat error.log | llm "What does this error mean?"
+ps aux | llm "Which process is using the most memory?"
+
+# Pipe code for review
+cat script.sh | llm "Review this bash script for potential issues"
+
+# Multiple prompts via pipe in interactive mode
+echo -e "Explain recursion\nShow me an example" | llm -i
 ```
 
 ## Troubleshooting
@@ -169,9 +196,59 @@ If the command hangs or returns no response, check:
 
 ## Advanced Usage
 
-### Piping Input
+### Stdin Handling
+
+The builtin intelligently handles stdin based on whether it's connected to a TTY:
+
+**Non-Interactive Mode (no `-i` flag):**
+- All stdin content is appended to your message
+- Useful for adding context from files or command output
+
 ```bash
-cat error.log | xargs -I {} llm "Explain this error: {}"
+# Add file content to your prompt
+cat config.json | llm "Explain this configuration"
+
+# Add command output to your prompt  
+ls -la | llm "Organize these files by type"
+
+# Combine arguments with stdin
+cat error.log | llm "This is the error log" "What went wrong?"
+```
+
+**Interactive Mode with TTY:**
+- Standard interactive prompt where you type each message
+- Special commands available: `/exit`, `/quit`, `/new`, `/help`
+
+```bash
+llm -i
+> What is recursion?
+[response]
+> Give me an example
+[response]
+> /exit
+```
+
+**Interactive Mode with Piped Input (non-TTY):**
+- Each line from stdin is sent as a separate prompt
+- Responses are displayed sequentially
+- No special commands are processed
+
+```bash
+echo -e "What is 2+2?\nWhat is 3+3?" | llm -i
+# First sends "What is 2+2?", waits for response
+# Then sends "What is 3+3?", waits for response
+```
+
+### Piping Examples
+```bash
+# Analyze log files
+cat error.log | llm "Summarize the errors in this log"
+
+# Code review
+git diff | llm "Review these changes"
+
+# Batch processing
+cat questions.txt | llm -i  # Each line is a separate question
 ```
 
 ## Unloading

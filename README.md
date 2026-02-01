@@ -44,6 +44,12 @@ Examples:
   llm What is the capital of France?
   llm Explain what this bash command does: find . -name "*.txt"
   llm -i    # Start interactive chat
+  
+  # Pipe stdin to add context to your message
+  cat error.log | llm "Explain this error"
+  
+  # Interactive mode with piped input (each line becomes a separate prompt)
+  echo -e "What is 2+2?\nWhat is 3+3?" | llm -i
 
 ## Custom Instructions
 
