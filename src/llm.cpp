@@ -44,6 +44,31 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
   return total_size;
 }
 
+// Parse expiration time from Copilot token
+// Token format: tid=...;exp=1234567890;sku=...
+static time_t parse_token_expiration(const std::string& copilot_token) {
+  size_t exp_pos = copilot_token.find("exp=");
+  if (exp_pos == std::string::npos) {
+    return 0;  // No expiration found
+  }
+  
+  size_t exp_start = exp_pos + 4;  // Skip "exp="
+  size_t exp_end = copilot_token.find(';', exp_start);
+  
+  std::string exp_str;
+  if (exp_end == std::string::npos) {
+    exp_str = copilot_token.substr(exp_start);
+  } else {
+    exp_str = copilot_token.substr(exp_start, exp_end - exp_start);
+  }
+  
+  try {
+    return (time_t)std::stol(exp_str);
+  } catch (...) {
+    return 0;
+  }
+}
+
 // Get path to credentials file
 static std::string get_auth_file_path() {
   const char *home = getenv("HOME");
@@ -172,7 +197,13 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
     }
     
     copilot_token = response_obj["token"].get<std::string>();
-    expires_at = time(nullptr) + 3600;  // Token valid for 1 hour
+    
+    // Use expires_at from API response if available, otherwise default to 1 hour
+    if (response_obj.contains("expires_at")) {
+      expires_at = response_obj["expires_at"].get<time_t>();
+    } else {
+      expires_at = time(nullptr) + 3600;  // Token valid for 1 hour
+    }
     
     // Save updated token
     return save_credentials(copilot_token, access_token, expires_at);
@@ -309,7 +340,7 @@ static bool poll_for_access_token(const std::string& device_code, std::string& a
 }
 
 // Authenticate using GitHub device flow
-static bool authenticate_with_github(std::string& copilot_token, std::string& access_token) {
+static bool authenticate_with_github(std::string& copilot_token, std::string& access_token, time_t& expires_at) {
   fprintf(stderr, "\n[Step 1/4] Requesting device code from GitHub...\n");
   
   std::string device_code, user_code, verification_uri;
@@ -374,6 +405,14 @@ static bool authenticate_with_github(std::string& copilot_token, std::string& ac
     }
     
     copilot_token = response_obj["token"].get<std::string>();
+    
+    // Use expires_at from API response if available, otherwise default to 1 hour
+    if (response_obj.contains("expires_at")) {
+      expires_at = response_obj["expires_at"].get<time_t>();
+    } else {
+      expires_at = time(nullptr) + 3600;  // Token valid for 1 hour
+    }
+    
     fprintf(stderr, "✓ GitHub Copilot token obtained\n\n");
     
     return true;
@@ -392,8 +431,14 @@ static bool get_copilot_token(std::string& copilot_token) {
   if (load_credentials(copilot_token, access_token, expires_at)) {
     time_t now = time(nullptr);
     
+    // Parse actual expiration from token itself
+    time_t token_expiration = parse_token_expiration(copilot_token);
+    
+    // Use the token's actual expiration if available, otherwise use stored expires_at
+    time_t actual_expiration = (token_expiration > 0) ? token_expiration : expires_at;
+    
     // Check if token is expired or expiring within 5 minutes
-    if (now < expires_at - 300) {
+    if (now < actual_expiration - 300) {
       // Token still valid
       return true;
     }
@@ -404,9 +449,8 @@ static bool get_copilot_token(std::string& copilot_token) {
       return true;
     } else {
       fprintf(stderr, "Token refresh failed, re-authenticating...\n");
-      if (authenticate_with_github(copilot_token, access_token)) {
-        time_t now = time(nullptr);
-        return save_credentials(copilot_token, access_token, now + 3600);
+      if (authenticate_with_github(copilot_token, access_token, expires_at)) {
+        return save_credentials(copilot_token, access_token, expires_at);
       }
       return false;
     }
@@ -416,10 +460,9 @@ static bool get_copilot_token(std::string& copilot_token) {
   fprintf(stderr, "\n=== First Time Setup ===\n");
   fprintf(stderr, "No GitHub Copilot credentials found. Starting authentication...\n");
   
-  if (authenticate_with_github(copilot_token, access_token)) {
+  if (authenticate_with_github(copilot_token, access_token, expires_at)) {
     fprintf(stderr, "[Step 4/4] Saving credentials...\n");
-    time_t now = time(nullptr);
-    if (save_credentials(copilot_token, access_token, now + 3600)) {
+    if (save_credentials(copilot_token, access_token, expires_at)) {
       fprintf(stderr, "✓ Credentials saved to ~/.copilot_auth\n\n");
       return true;
     }
