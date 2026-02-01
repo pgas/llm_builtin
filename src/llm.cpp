@@ -56,7 +56,6 @@ static bool load_credentials(std::string& copilot_token, std::string& access_tok
   std::ifstream file(auth_file);
   
   if (!file.is_open()) {
-    fprintf(stderr, "Debug: Cannot open %s\n", auth_file.c_str());
     return false;
   }
   
@@ -66,10 +65,6 @@ static bool load_credentials(std::string& copilot_token, std::string& access_tok
     
     if (!auth_data.contains("copilot_token") || !auth_data.contains("access_token") || 
         !auth_data.contains("expires_at")) {
-      fprintf(stderr, "Debug: Missing required fields in %s\n", auth_file.c_str());
-      fprintf(stderr, "Debug: Has copilot_token: %s\n", auth_data.contains("copilot_token") ? "yes" : "no");
-      fprintf(stderr, "Debug: Has access_token: %s\n", auth_data.contains("access_token") ? "yes" : "no");
-      fprintf(stderr, "Debug: Has expires_at: %s\n", auth_data.contains("expires_at") ? "yes" : "no");
       return false;
     }
     
@@ -82,13 +77,11 @@ static bool load_credentials(std::string& copilot_token, std::string& access_tok
     } else if (auth_data["expires_at"].is_string()) {
       expires_at = (time_t)std::stol(auth_data["expires_at"].get<std::string>());
     } else {
-      fprintf(stderr, "Debug: expires_at has invalid type\n");
       return false;
     }
     
     return true;
   } catch (const json::exception& e) {
-    fprintf(stderr, "Debug: JSON parsing error: %s\n", e.what());
     return false;
   }
 }
@@ -123,6 +116,7 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
   CURL *curl;
   CURLcode res;
   ResponseData response;
+  long http_code = 0;
   
   curl = curl_easy_init();
   if (!curl) {
@@ -134,6 +128,7 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
   std::string auth_header = "Authorization: token " + access_token;
   
   struct curl_slist *headers = NULL;
+  headers = curl_slist_append(headers, "User-Agent: llm-builtin/1.0");
   headers = curl_slist_append(headers, "Accept: application/json");
   headers = curl_slist_append(headers, auth_header.c_str());
   
@@ -145,12 +140,20 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
   
   res = curl_easy_perform(curl);
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
   
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
   
   if (res != CURLE_OK) {
     fprintf(stderr, "Failed to refresh token: %s\n", curl_easy_strerror(res));
+    return false;
+  }
+  
+  // Check HTTP response code
+  if (http_code != 200) {
+    fprintf(stderr, "Error: GitHub API returned HTTP %ld\n", http_code);
+    fprintf(stderr, "Response: %s\n", response.data.c_str());
     return false;
   }
   
@@ -172,6 +175,7 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
     return save_credentials(copilot_token, access_token, expires_at);
   } catch (const json::exception& e) {
     fprintf(stderr, "Error parsing token response: %s\n", e.what());
+    fprintf(stderr, "Response was: %s\n", response.data.c_str());
     return false;
   }
 }
