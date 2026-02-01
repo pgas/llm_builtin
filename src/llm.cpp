@@ -26,6 +26,17 @@ extern "C" {
 #include "shell.h"
 #include "bashgetopt.h"
 #include "common.h"
+
+// Forward declarations from readline/history.h
+// This is not public, so may break in future versions of readline
+typedef struct _hist_entry {
+  char *line;
+  char *timestamp;
+  void *data;
+} HIST_ENTRY;
+
+extern HIST_ENTRY **history_list(void);
+
 extern char* ttyname(int fd);
 }
 
@@ -36,6 +47,36 @@ struct ResponseData {
 
 // In-memory chat history for the current shell session
 static std::vector<json> g_chat_history;
+
+// Get the last N entries from bash history
+// Returns a vector of history entries (most recent last)
+static std::vector<std::string> get_bash_history(int limit = 10) {
+  std::vector<std::string> history_entries;
+  
+  // Get the history list from readline
+  HIST_ENTRY **hlist = history_list();
+  if (!hlist) {
+    return history_entries;
+  }
+  
+  // Count total entries
+  int total = 0;
+  while (hlist[total]) {
+    total++;
+  }
+  // Calculate start index (to get the last 'limit' entries)
+  limit += 1; // last command is llm itself, skip it
+  int start_idx = (total > limit) ? (total - limit) : 0;
+  
+  // Collect the entries
+  for (int i = start_idx; i < total-1; i++) {
+    if (hlist[i] && hlist[i]->line) {
+      history_entries.push_back(std::string(hlist[i]->line));
+    }
+  }
+  
+  return history_entries;
+}
 
 // Callback function for curl to write response data
 static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -610,10 +651,24 @@ static int send_chat_message(const std::string& message) {
   // Build JSON payload using nlohmann/json
   json messages = json::array();
   std::string instructions = load_instructions();
-  if (!instructions.empty()) {
+  
+  // Append bash history context to system message
+  std::string system_message = instructions;
+  std::vector<std::string> bash_history = get_bash_history(10);
+  if (!bash_history.empty()) {
+    if (!system_message.empty()) {
+      system_message += "\n\n";
+    }
+    system_message += "Recent shell commands:\n";
+    for (const auto& cmd : bash_history) {
+      system_message += "  " + cmd + "\n";
+    }
+  }
+  
+  if (!system_message.empty()) {
     messages.push_back({
       {"role", "system"},
-      {"content", instructions}
+      {"content", system_message}
     });
   }
   for (const auto& msg : g_chat_history) {
