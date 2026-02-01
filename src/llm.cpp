@@ -595,12 +595,18 @@ static int send_chat_message(const std::string& message) {
 
 // Interactive chat mode
 static int interactive_chat() {
-  printf("GitHub Copilot Chat (type 'exit' or 'quit' to end)\n");
-  printf("================================================\n\n");
+  const char *cyan = "\033[36m";
+  const char *green = "\033[32m";
+  const char *yellow = "\033[33m";
+  const char *bold = "\033[1m";
+  const char *reset = "\033[0m";
+
+  printf("%sCommands: %s/help%s, %s/new%s, %s/exit%s, %s/quit%s%s\n\n",
+      yellow, bold, reset, bold, reset, bold, reset, bold, reset, reset);
   
   char buffer[4096];
   while (true) {
-    printf("You: ");
+    printf("%s%s> %s", green, bold, reset);
     fflush(stdout);
     
     if (!fgets(buffer, sizeof(buffer), stdin)) {
@@ -618,11 +624,26 @@ static int interactive_chat() {
       continue;
     }
     
-    if (message == "exit" || message == "quit") {
+    if (message == "/exit" || message == "/quit") {
       break;
     }
+
+    if (message == "/new") {
+      g_chat_history.clear();
+      printf("%s%sNew chat started.%s\n\n", yellow, bold, reset);
+      continue;
+    }
+
+    if (message == "/help") {
+      printf("%s%sCommands%s\n", bold, cyan, reset);
+      printf("  %s/help%s   Show this help\n", bold, reset);
+      printf("  %s/new%s    Start a new chat (clear history)\n", bold, reset);
+      printf("  %s/exit%s   Exit interactive mode\n", bold, reset);
+      printf("  %s/quit%s   Exit interactive mode\n\n", bold, reset);
+      continue;
+    }
     
-    printf("\nCopilot: ");
+    printf("\n%s%sCopilot%s > %s", cyan, bold, reset, reset);
     fflush(stdout);
     
     if (send_chat_message(message) != EXECUTION_SUCCESS) {
