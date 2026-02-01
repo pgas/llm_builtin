@@ -33,6 +33,9 @@ struct ResponseData {
   std::string data;
 };
 
+// In-memory chat history for the current shell session
+static std::vector<json> g_chat_history;
+
 // Callback function for curl to write response data
 static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
   size_t total_size = size * nmemb;
@@ -479,13 +482,17 @@ static int send_chat_message(const std::string& message) {
   }
   
   // Build JSON payload using nlohmann/json
+  json messages = json::array();
+  for (const auto& msg : g_chat_history) {
+    messages.push_back(msg);
+  }
+  messages.push_back({
+    {"role", "user"},
+    {"content", message}
+  });
+
   json payload_obj = {
-    {"messages", json::array({
-      {
-        {"role", "user"},
-        {"content", message}
-      }
-    })},
+    {"messages", messages},
     {"model", "gpt-4"},
     {"stream", true}
   };
@@ -529,6 +536,16 @@ static int send_chat_message(const std::string& message) {
   
   printf("%s\n", content.c_str());
   fflush(stdout);
+
+  // Update history after successful response
+  g_chat_history.push_back({
+    {"role", "user"},
+    {"content", message}
+  });
+  g_chat_history.push_back({
+    {"role", "assistant"},
+    {"content", content}
+  });
   
   return EXECUTION_SUCCESS;
 }
@@ -580,14 +597,18 @@ llm_builtin (WORD_LIST *list)
 {
   int opt;
   int interactive = 0;
+  int new_chat = 0;
   std::string message;
-  const char *opt_string = "i";
+  const char *opt_string = "in";
   
   reset_internal_getopt();
   while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
     switch (opt) {
       case 'i':
         interactive = 1;
+        break;
+      case 'n':
+        new_chat = 1;
         break;
       CASE_HELPOPT;
       default:
@@ -596,6 +617,10 @@ llm_builtin (WORD_LIST *list)
     }
   }
   list = loptend;
+
+  if (new_chat) {
+    g_chat_history.clear();
+  }
   
   if (interactive) {
     return interactive_chat();
@@ -637,10 +662,11 @@ llm_builtin_unload (char *s)
 const char *llm_doc[] = {
   "Chat with GitHub Copilot LLM.",
   "",
-  "Usage: llm [-i] [message...]",
+  "Usage: llm [-i] [-n] [message...]",
   "",
   "Options:",
   "  -i    Interactive chat mode",
+  "  -n    Start a new chat (clear conversation history)",
   "",
   "Examples:",
   "  llm What is the capital of France?",
