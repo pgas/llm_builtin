@@ -8,7 +8,6 @@
 
 #include <sys/stat.h>
 #include <errno.h>
-#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <curl/curl.h>
@@ -96,7 +95,7 @@ static void ensure_instructions_file() {
   std::string instructions_file = get_instructions_file_path();
 
   if (mkdir(instructions_dir.c_str(), 0700) != 0 && errno != EEXIST) {
-    fprintf(stderr, "Warning: Cannot create directory %s\n", instructions_dir.c_str());
+    std::cerr << "Warning: Cannot create directory " << instructions_dir << "\n";
     return;
   }
 
@@ -108,7 +107,7 @@ static void ensure_instructions_file() {
 
   std::ofstream file(instructions_file);
   if (!file.is_open()) {
-    fprintf(stderr, "Warning: Cannot write to %s\n", instructions_file.c_str());
+    std::cerr << "Warning: Cannot write to " << instructions_file << "\n";
     return;
   }
 
@@ -200,7 +199,7 @@ static bool save_credentials(const std::string& copilot_token, const std::string
   std::string auth_file = get_auth_file_path();
 
   if (mkdir(get_llm_dir_path().c_str(), 0700) != 0 && errno != EEXIST) {
-    fprintf(stderr, "Error: Cannot create directory %s\n", get_llm_dir_path().c_str());
+    std::cerr << "Error: Cannot create directory " << get_llm_dir_path() << "\n";
     return false;
   }
   
@@ -212,7 +211,7 @@ static bool save_credentials(const std::string& copilot_token, const std::string
   
   std::ofstream file(auth_file);
   if (!file.is_open()) {
-    fprintf(stderr, "Error: Cannot write to %s\n", auth_file.c_str());
+    std::cerr << "Error: Cannot write to " << auth_file << "\n";
     return false;
   }
   
@@ -234,7 +233,7 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
   
   curl = curl_easy_init();
   if (!curl) {
-    fprintf(stderr, "Failed to initialize curl for token refresh\n");
+    std::cerr << "Failed to initialize curl for token refresh\n";
     return false;
   }
   
@@ -260,14 +259,14 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
   curl_easy_cleanup(curl);
   
   if (res != CURLE_OK) {
-    fprintf(stderr, "Failed to refresh token: %s\n", curl_easy_strerror(res));
+    std::cerr << "Failed to refresh token: " << curl_easy_strerror(res) << "\n";
     return false;
   }
   
   // Check HTTP response code
   if (http_code != 200) {
-    fprintf(stderr, "Error: GitHub API returned HTTP %ld\n", http_code);
-    fprintf(stderr, "Response: %s\n", response.data.c_str());
+    std::cerr << "Error: GitHub API returned HTTP " << http_code << "\n";
+    std::cerr << "Response: " << response.data << "\n";
     return false;
   }
   
@@ -275,9 +274,9 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
     json response_obj = json::parse(response.data);
     
     if (!response_obj.contains("token")) {
-      fprintf(stderr, "Error: Failed to get Copilot token\n");
+      std::cerr << "Error: Failed to get Copilot token\n";
       if (response_obj.contains("message")) {
-        fprintf(stderr, "GitHub API response: %s\n", response_obj["message"].get<std::string>().c_str());
+        std::cerr << "GitHub API response: " << response_obj["message"].get<std::string>() << "\n";
       }
       return false;
     }
@@ -294,8 +293,8 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
     // Save updated token
     return save_credentials(copilot_token, access_token, expires_at);
   } catch (const json::exception& e) {
-    fprintf(stderr, "Error parsing token response: %s\n", e.what());
-    fprintf(stderr, "Response was: %s\n", response.data.c_str());
+    std::cerr << "Error parsing token response: " << e.what() << "\n";
+    std::cerr << "Response was: " << response.data << "\n";
     return false;
   }
 }
@@ -305,7 +304,7 @@ static bool get_device_code(std::string& device_code, std::string& user_code,
                              std::string& verification_uri, int& interval) {
   CURL *curl = curl_easy_init();
   if (!curl) {
-    fprintf(stderr, "Failed to initialize curl\n");
+    std::cerr << "Failed to initialize curl\n";
     return false;
   }
   
@@ -329,7 +328,7 @@ static bool get_device_code(std::string& device_code, std::string& user_code,
   curl_easy_cleanup(curl);
   
   if (res != CURLE_OK) {
-    fprintf(stderr, "Failed to get device code: %s\n", curl_easy_strerror(res));
+    std::cerr << "Failed to get device code: " << curl_easy_strerror(res) << "\n";
     return false;
   }
   
@@ -337,7 +336,7 @@ static bool get_device_code(std::string& device_code, std::string& user_code,
     json response_obj = json::parse(response.data);
     
     if (!response_obj.contains("device_code")) {
-      fprintf(stderr, "Error: Failed to get device code\n");
+      std::cerr << "Error: Failed to get device code\n";
       return false;
     }
     
@@ -348,7 +347,7 @@ static bool get_device_code(std::string& device_code, std::string& user_code,
     
     return true;
   } catch (const json::exception& e) {
-    fprintf(stderr, "Error parsing device code response: %s\n", e.what());
+    std::cerr << "Error parsing device code response: " << e.what() << "\n";
     return false;
   }
 }
@@ -367,7 +366,7 @@ static bool poll_for_access_token(const std::string& device_code, std::string& a
     
     curl = curl_easy_init();
     if (!curl) {
-      fprintf(stderr, "Failed to initialize curl\n");
+      std::cerr << "Failed to initialize curl\n";
       return false;
     }
     
@@ -404,16 +403,16 @@ static bool poll_for_access_token(const std::string& device_code, std::string& a
       
       std::string error = response_obj.value("error", "");
       if (error == "authorization_pending") {
-        fprintf(stderr, ".");
-        fflush(stderr);
+        std::cerr << ".";
+        std::cerr.flush();
         continue;
       } else if (error == "slow_down") {
         interval += 5;
-        fprintf(stderr, ".");
-        fflush(stderr);
+        std::cerr << ".";
+        std::cerr.flush();
         continue;
       } else if (!error.empty()) {
-        fprintf(stderr, "\nError: %s\n", error.c_str());
+        std::cerr << "\nError: " << error << "\n";
         return false;
       }
     } catch (const json::exception& e) {
@@ -421,13 +420,13 @@ static bool poll_for_access_token(const std::string& device_code, std::string& a
     }
   }
   
-  fprintf(stderr, "\nTimeout waiting for authorization\n");
+  std::cerr << "\nTimeout waiting for authorization\n";
   return false;
 }
 
 // Authenticate using GitHub device flow
 static bool authenticate_with_github(std::string& copilot_token, std::string& access_token, time_t& expires_at) {
-  fprintf(stderr, "\n[Step 1/4] Requesting device code from GitHub...\n");
+  std::cerr << "\n[Step 1/4] Requesting device code from GitHub...\n";
   
   std::string device_code, user_code, verification_uri;
   int interval = 5;
@@ -436,23 +435,23 @@ static bool authenticate_with_github(std::string& copilot_token, std::string& ac
     return false;
   }
   
-  fprintf(stderr, "\n[Step 2/4] Authorization required\n");
-  fprintf(stderr, "==================================\n\n");
-  fprintf(stderr, "Please visit: %s\n", verification_uri.c_str());
-  fprintf(stderr, "And enter code: %s\n\n", user_code.c_str());
-  fprintf(stderr, "Waiting for authorization");
-  fflush(stderr);
+  std::cerr << "\n[Step 2/4] Authorization required\n";
+  std::cerr << "==================================\n\n";
+  std::cerr << "Please visit: " << verification_uri << "\n";
+  std::cerr << "And enter code: " << user_code << "\n\n";
+  std::cerr << "Waiting for authorization";
+  std::cerr.flush();
   
   if (!poll_for_access_token(device_code, access_token)) {
     return false;
   }
   
-  fprintf(stderr, "\n✓ GitHub access token obtained\n\n");
-  fprintf(stderr, "[Step 3/4] Fetching GitHub Copilot token...\n");
+  std::cerr << "\n✓ GitHub access token obtained\n\n";
+  std::cerr << "[Step 3/4] Fetching GitHub Copilot token...\n";
   
   CURL *curl = curl_easy_init();
   if (!curl) {
-    fprintf(stderr, "Failed to initialize curl\n");
+    std::cerr << "Failed to initialize curl\n";
     return false;
   }
   
@@ -474,7 +473,7 @@ static bool authenticate_with_github(std::string& copilot_token, std::string& ac
   curl_easy_cleanup(curl);
   
   if (res != CURLE_OK) {
-    fprintf(stderr, "Failed to get Copilot token: %s\n", curl_easy_strerror(res));
+    std::cerr << "Failed to get Copilot token: " << curl_easy_strerror(res) << "\n";
     return false;
   }
   
@@ -482,11 +481,11 @@ static bool authenticate_with_github(std::string& copilot_token, std::string& ac
     json response_obj = json::parse(response.data);
     
     if (!response_obj.contains("token") || response_obj["token"].is_null()) {
-      fprintf(stderr, "Error: Failed to get Copilot token\n");
+      std::cerr << "Error: Failed to get Copilot token\n";
       if (response_obj.contains("message")) {
-        fprintf(stderr, "GitHub API response: %s\n", response_obj["message"].get<std::string>().c_str());
+        std::cerr << "GitHub API response: " << response_obj["message"].get<std::string>() << "\n";
       }
-      fprintf(stderr, "Note: You need an active GitHub Copilot subscription\n");
+      std::cerr << "Note: You need an active GitHub Copilot subscription\n";
       return false;
     }
     
@@ -499,11 +498,11 @@ static bool authenticate_with_github(std::string& copilot_token, std::string& ac
       expires_at = time(nullptr) + 3600;  // Token valid for 1 hour
     }
     
-    fprintf(stderr, "✓ GitHub Copilot token obtained\n\n");
+    std::cerr << "✓ GitHub Copilot token obtained\n\n";
     
     return true;
   } catch (const json::exception& e) {
-    fprintf(stderr, "Error parsing Copilot token response: %s\n", e.what());
+    std::cerr << "Error parsing Copilot token response: " << e.what() << "\n";
     return false;
   }
 }
@@ -541,13 +540,13 @@ static bool get_copilot_token(std::string& copilot_token) {
   }
   
   // No credentials file found, start authentication flow
-  fprintf(stderr, "\n=== First Time Setup ===\n");
-  fprintf(stderr, "No GitHub Copilot credentials found. Starting authentication...\n");
+  std::cerr << "\n=== First Time Setup ===\n";
+  std::cerr << "No GitHub Copilot credentials found. Starting authentication...\n";
   
   if (authenticate_with_github(copilot_token, access_token, expires_at)) {
-    fprintf(stderr, "[Step 4/4] Saving credentials...\n");
+    std::cerr << "[Step 4/4] Saving credentials...\n";
     if (save_credentials(copilot_token, access_token, expires_at)) {
-      fprintf(stderr, "✓ Credentials saved to ~/.bash_llm/copilot_auth.json\n\n");
+      std::cerr << "✓ Credentials saved to ~/.bash_llm/copilot_auth.json\n\n";
       return true;
     }
   }
@@ -604,7 +603,7 @@ static int send_chat_message(const std::string& message) {
   
   curl = curl_easy_init();
   if (!curl) {
-    fprintf(stderr, "Failed to initialize curl\n");
+    std::cerr << "Failed to initialize curl\n";
     return EXECUTION_FAILURE;
   }
   
@@ -655,7 +654,7 @@ static int send_chat_message(const std::string& message) {
   curl_easy_cleanup(curl);
   
   if (res != CURLE_OK) {
-    fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+    std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << "\n";
     return EXECUTION_FAILURE;
   }
   
@@ -663,13 +662,12 @@ static int send_chat_message(const std::string& message) {
   std::string content = extract_content_from_sse(response.data);
   
   if (content.empty()) {
-    fprintf(stderr, "Error: No content received or failed to parse response\n");
-    fprintf(stderr, "Response: %s\n", response.data.c_str());
+    std::cerr << "Error: No content received or failed to parse response\n";
+    std::cerr << "Response: " << response.data << "\n";
     return EXECUTION_FAILURE;
   }
   
-  printf("%s\n", content.c_str());
-  fflush(stdout);
+  std::cout << content << "\n" << std::flush;
 
   // Update history after successful response
   g_chat_history.push_back({
@@ -692,23 +690,19 @@ static int interactive_chat(bool is_tty) {
   const char *bold = "\033[1m";
   const char *reset = "\033[0m";
 
-  FILE *input = fopen("/dev/stdin", "r");
+  std::ifstream input("/dev/stdin");
 
-  char buffer[4096];
+  std::string message;
   while (true) {
   
-    printf("%s%s> %s", green, bold, reset);
-    fflush(stdout);
+    std::cout << green << bold << "> " << reset << std::flush;
     
-    if (!fgets(buffer, sizeof(buffer), input)) {
+    if (!std::getline(input, message)) {
       break;
     }
     
-    std::string message(buffer);
-    
-    // Trim whitespace and newline
-    message.erase(0, message.find_first_not_of(" \t\n\r"));
-    message.erase(message.find_last_not_of(" \t\n\r") + 1);
+    // Trim whitespace
+    message = trim_whitespace(message);
     
     if (message.empty()) {
       continue;
@@ -721,28 +715,24 @@ static int interactive_chat(bool is_tty) {
     
     if (message == "/new") {
       g_chat_history.clear();
-      printf("%s%sNew chat started.%s\n\n", yellow, bold, reset);
+      std::cout << yellow << bold << "New chat started." << reset << "\n\n";
       continue;
     }
     
     if (message == "/help") {
-      printf("%s%sCommands%s\n", bold, cyan, reset);
-      printf("  %s/help%s   Show this help\n", bold, reset);
-      printf("  %s/new%s    Start a new chat (clear history)\n", bold, reset);
-      printf("  %s/exit%s   Exit interactive mode\n", bold, reset);
-      printf("  %s/quit%s   Exit interactive mode\n\n", bold, reset);
+      std::cout << bold << cyan << "Commands" << reset << "\n";
+      std::cout << "  " << bold << "/help" << reset << "   Show this help\n";
+      std::cout << "  " << bold << "/new" << reset << "    Start a new chat (clear history)\n";
+      std::cout << "  " << bold << "/exit" << reset << "   Exit interactive mode\n";
+      std::cout << "  " << bold << "/quit" << reset << "   Exit interactive mode\n\n";
       continue;
     }
     
     // Send message and wait for response before processing next line
     if (send_chat_message(message) != EXECUTION_SUCCESS) {
-      fprintf(stderr, "Failed to send message\n");
+      std::cerr << "Failed to send message\n";
       // Continue processing remaining lines even on error
     }
-  }
-  
-  if (input != stdin) {
-    fclose(input);
   }
 
   return EXECUTION_SUCCESS;
@@ -750,16 +740,16 @@ static int interactive_chat(bool is_tty) {
 
 // Non-tty interactive mode: read each stdin line as a prompt
 static int interactive_chat_pipe() {
-  char buffer[4096];
-  FILE *input = fopen("/dev/stdin", "r");
-  while (fgets(buffer, sizeof(buffer), input)) {
-    std::string message = trim_whitespace(std::string(buffer));
+  std::ifstream input("/dev/stdin");
+  std::string message;
+  while (std::getline(input, message)) {
+    message = trim_whitespace(message);
     if (message.empty()) {
       continue;
     }
     // Send message and wait for response before processing next line
     if (send_chat_message(message) != EXECUTION_SUCCESS) {
-      fprintf(stderr, "Failed to send message\n");
+      std::cerr << "Failed to send message\n";
       // Continue processing remaining lines even on error
     }
   }
@@ -826,12 +816,11 @@ llm_builtin (WORD_LIST *list)
   
   // add input to the prompt
   if (!is_tty){
-    FILE * input = fopen("/dev/stdin", "r");
-    char buffer[4096];
-    while (fgets(buffer, sizeof(buffer), input)) {
-      ss << "\n" << buffer;
+    std::ifstream input("/dev/stdin");
+    std::string line;
+    while (std::getline(input, line)) {
+      ss << "\n" << line;
     }
-    fclose(input);
   }
 
   message = ss.str();
