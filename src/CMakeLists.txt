@@ -13,11 +13,16 @@ endif()
 # Find curl package
 find_package(CURL REQUIRED)
 
+# Add nlohmann/json via FetchContent
+include(FetchContent)
+FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.2/json.tar.xz)
+FetchContent_MakeAvailable(json)
+
 # Create the shared library
 add_library(llm MODULE llm.cpp)
 
-# Link against curl
-target_link_libraries(llm PRIVATE CURL::libcurl)
+# Link against curl and nlohmann/json
+target_link_libraries(llm PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
 
 
 # Set library properties

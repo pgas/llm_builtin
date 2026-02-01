@@ -36,26 +36,55 @@ enable -f /usr/local/lib/bas/llm.so llm
 
 ## Getting GitHub Copilot Token
 
-You'll need a GitHub Copilot token to use this builtin. Use the provided script to get it:
+You'll need a GitHub Copilot subscription to use this builtin. Use the provided script to authenticate:
 
 ```bash
 ./get_token.sh
 ```
 
-This script will guide you through the authentication process and retrieve your GitHub Copilot token.
+This script will:
+1. Guide you through GitHub's OAuth device flow
+2. Open a browser for you to authenticate
+3. Fetch your GitHub Copilot token
+4. Save both your OAuth access token and Copilot token to `~/.copilot_auth`
+5. Set file permissions to 600 (secure)
 
-## Setting the Token
+The credentials will be stored locally and the builtin will automatically refresh your Copilot token as needed (tokens expire after 1 hour but the long-lived access token allows automatic refresh).
 
-Export your GitHub Copilot token as an environment variable:
+## Token Management
+
+Your credentials are automatically managed by the builtin:
+
+- **Storage**: `~/.copilot_auth` (permissions: 600)
+- **Format**: JSON file containing:
+  - `access_token`: GitHub OAuth token (long-lived)
+  - `copilot_token`: GitHub Copilot API token (1-hour expiry)
+  - `expires_at`: Unix timestamp of when the Copilot token expires
+
+**No manual token refresh needed!** The builtin will:
+- Check if your Copilot token is expired
+- Automatically refresh it using the access token if needed
+- Save the new token back to `~/.copilot_auth`
+
+## Setup (One-time)
+
+After building the project:
 
 ```bash
-export GITHUB_COPILOT_TOKEN='your_token_here'
+# Generate and save credentials
+bash get_token.sh
+
+# Load the builtin into bash
+enable -f ./build/src/llm.so llm
+
+# Start using it!
+llm What is the capital of France?
 ```
 
-Add this to your `.bashrc` or `.bash_profile` for persistence:
+To make it permanent, add to your `~/.bashrc`:
 
 ```bash
-echo 'export GITHUB_COPILOT_TOKEN="your_token_here"' >> ~/.bashrc
+enable -f /path/to/llm_builtin/build/src/llm.so llm
 ```
 
 ## Usage
@@ -113,29 +142,35 @@ llm -i
 
 ## Troubleshooting
 
-### Token Not Set
+### Credentials Not Found
 If you see:
 ```
-Error: GITHUB_COPILOT_TOKEN environment variable not set
+Error: No credentials found at ~/.copilot_auth
 ```
 
-Make sure you've exported the token:
+Run the token generator script:
 ```bash
-export GITHUB_COPILOT_TOKEN='your_token_here'
+bash get_token.sh
 ```
 
-### Invalid Token
-If you get authentication errors, your token may have expired. GitHub Copilot tokens typically expire after some time and need to be refreshed.
+### Token Expired
+The builtin automatically handles expired tokens by refreshing them. If you see token-related errors, try:
+```bash
+bash get_token.sh
+```
+
+This will update your credentials file with new tokens.
 
 ### Connection Errors
-Make sure you have internet connectivity and can reach `api.githubcopilot.com`:
+Make sure you have internet connectivity and can reach the GitHub API:
 ```bash
+curl -I https://api.github.com
 curl -I https://api.githubcopilot.com
 ```
 
 ### No Response
 If the command hangs or returns no response, check:
-1. Your token is valid
+1. Your credentials are in `~/.copilot_auth`
 2. You have an active GitHub Copilot subscription
 3. Network connectivity is working
 4. The GitHub Copilot API is accessible

@@ -20,13 +20,13 @@ make
 enable -f /path/to/llm_builtin/build/src/llm.so llm
 ```
 
-### 3. Set Your Token
+### 3. Generate Credentials
 
 ```bash
-export GITHUB_COPILOT_TOKEN='your_token_here'
+bash /path/to/llm_builtin/get_token.sh
 ```
 
-See [USAGE.md](USAGE.md) for detailed instructions on obtaining a GitHub Copilot token.
+This script will guide you through GitHub's OAuth flow and save your credentials to `~/.copilot_auth`. The builtin will automatically refresh your token as needed.
 
 ### 4. Start Chatting
 
@@ -57,7 +57,8 @@ Examples:
 - Linux system with bash 4.0+
 - CMake 3.10+
 - libcurl development libraries
-- GitHub Copilot subscription and token
+- nlohmann/json (automatically fetched by CMake)
+- GitHub Copilot subscription (for API access)
 
 ## Documentation
 

@@ -6,41 +6,46 @@ A bash loadable builtin (`llm`) that provides chat functionality with GitHub Cop
 
 ## Key Components
 
-### 1. Main Source Code (`src/hello.cpp`)
+### 1. Main Source Code (`src/llm.cpp`)
 - Implements the `llm` bash builtin command
 - Uses libcurl to communicate with GitHub Copilot API
+- Uses nlohmann/json for robust JSON parsing and serialization
 - Supports two modes:
   - **Single query mode**: `llm your question here`
   - **Interactive mode**: `llm -i` for ongoing conversations
 - Handles streaming responses from the API
 - Parses Server-Sent Events (SSE) format responses
+- **Automatic token refresh**: Detects expired tokens and refreshes them automatically
 
 ### 2. Build System
 - CMakeLists.txt configured to:
   - Find and link bash headers
   - Find and link libcurl
+  - Fetch and link nlohmann/json library
   - Build as a loadable shared library (.so)
   - Support static linking for portability
 
 ### 3. Documentation
 - **README.md**: Quick start guide and overview
 - **USAGE.md**: Comprehensive usage documentation including:
-  - Token acquisition methods
+  - Token acquisition via OAuth device flow
+  - Automatic token management explanation
   - Detailed examples
   - Troubleshooting guide
   - Advanced usage patterns
 
 ### 4. Helper Scripts
 - **test.sh**: Tests the builtin and verifies setup
-- **get_token.sh**: Helps locate GitHub Copilot tokens
+- **get_token.sh**: Authenticates with GitHub and generates credentials file
 
 ## How It Works
 
-1. **Authentication**: Uses `GITHUB_COPILOT_TOKEN` environment variable
-2. **API Communication**: Makes HTTPS requests to `api.githubcopilot.com/chat/completions`
-3. **Request Format**: Sends JSON with user message and model specification
-4. **Response Handling**: Parses streaming SSE responses and extracts content
-5. **Display**: Outputs the LLM's response to stdout
+1. **Credential Storage**: Credentials saved to `~/.copilot_auth` (JSON format, 600 permissions)
+2. **Token Management**: Automatically loads and refreshes tokens as needed
+3. **API Communication**: Makes HTTPS requests to `api.githubcopilot.com/chat/completions`
+4. **Request Format**: Sends JSON with user message and model specification (using nlohmann/json)
+5. **Response Handling**: Parses streaming SSE responses and extracts content using nlohmann/json
+6. **Display**: Outputs the LLM's response to stdout
 
 ## Technical Details
 
@@ -79,7 +84,8 @@ data: [DONE]
 - **Bash 4.0+**: For builtin support
 - **CMake 3.10+**: Build system
 - **libcurl**: HTTP client library
-- **C++20**: For modern C++ features (std::string, etc.)
+- **nlohmann/json**: JSON library (header-only, auto-fetched)
+- **C++20**: For modern C++ features
 
 ## Usage Flow
 
@@ -108,23 +114,25 @@ You: exit
 
 ## Security Considerations
 
-1. Token stored in environment variable (not in code)
-2. SSL/TLS verification enabled (CURLOPT_SSL_VERIFYPEER=1)
-3. No token logging or printing
-4. Token should be kept private and not committed to version control
+1. Credentials stored in `~/.copilot_auth` with secure permissions (600)
+2. Access token stored locally (never transmitted in requests except to GitHub API)
+3. SSL/TLS verification enabled (CURLOPT_SSL_VERIFYPEER=1)
+4. No token logging or printing to console
+5. Credentials file should not be committed to version control
+6. Automatic token refresh uses secure HTTP only
 
 ## Future Enhancement Ideas
 
 - Add conversation history support
 - Support for different models (GPT-3.5, GPT-4, etc.)
-- Token auto-refresh mechanism
-- Response formatting (markdown rendering)
+- Response formatting (markdown rendering, syntax highlighting)
 - Cost tracking/usage stats
 - Response caching
 - Multi-turn context preservation
 - Custom system prompts
 - Output to file option
 - JSON output mode for scripting
+- Token revocation management
 
 ## Files Created/Modified
 
@@ -143,16 +151,21 @@ You: exit
 # Build
 mkdir -p build && cd build
 cmake ..
-make
+ninja
+
+# Generate credentials (one-time)
+bash ../get_token.sh
 
 # Load into bash
-enable -f $(pwd)/build/src/llm.so llm
-
-# Set token
-export GITHUB_COPILOT_TOKEN='your_token'
+enable -f $(pwd)/src/llm.so llm
 
 # Use
 llm Hello, world!
+```
+
+To make permanent, add to `~/.bashrc`:
+```bash
+enable -f /path/to/llm_builtin/build/src/llm.so llm
 ```
 
 ## Notes
@@ -162,3 +175,5 @@ llm Hello, world!
 - Each query is stateless (no conversation history between invocations)
 - Responses are printed as they arrive (streaming)
 - Error messages go to stderr, responses to stdout
+- Token refresh is automatic and silent (only shows message on stderr)
+- Credentials are stored securely and automatically managed

@@ -125,17 +125,32 @@ fi
 echo "✓ GitHub Copilot token obtained"
 echo
 
-# Step 5: Display result
-echo "[Step 4/4] Success!"
+# Step 5: Save tokens to file
+echo "[Step 4/4] Saving credentials..."
+AUTH_FILE="$HOME/.copilot_auth"
+
+# Create JSON with both tokens and expiry time (1 hour from now)
+EXPIRY=$(($(date +%s) + 3600))
+AUTH_DATA=$(jq -n \
+  --arg access_token "$ACCESS_TOKEN" \
+  --arg copilot_token "$COPILOT_TOKEN" \
+  --argjson expires_at "$EXPIRY" \
+  '{access_token: $access_token, copilot_token: $copilot_token, expires_at: $expires_at}')
+
+echo "$AUTH_DATA" > "$AUTH_FILE"
+chmod 600 "$AUTH_FILE"
+
+echo "✓ Credentials saved to $AUTH_FILE"
+echo
+
+# Step 6: Display result
+echo "[Step 5/5] Success!"
 echo "==================="
 echo
-echo "Your GitHub Copilot token:"
+echo "Your credentials have been saved to: $AUTH_FILE"
 echo
-echo "${COPILOT_TOKEN}"
+echo "The builtin will now automatically refresh your Copilot token when needed."
 echo
-echo "To use it, run:"
-echo "  export GITHUB_COPILOT_TOKEN='${COPILOT_TOKEN}'"
-echo
-echo "To make it permanent, add to your ~/.bashrc:"
-echo "  echo 'export GITHUB_COPILOT_TOKEN=\"${COPILOT_TOKEN}\"' >> ~/.profile"
+echo "Reload bash to start using the 'llm' builtin:"
+echo "  exec bash"
 echo

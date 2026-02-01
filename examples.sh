@@ -6,10 +6,10 @@
 # 1. Load the builtin
 enable -f "$(dirname "$0")/build/src/llm.so" llm
 
-# 2. Check if token is set
-if [ -z "$GITHUB_COPILOT_TOKEN" ]; then
-    echo "Error: Please set GITHUB_COPILOT_TOKEN first"
-    echo "  export GITHUB_COPILOT_TOKEN='your_token_here'"
+# 2. Check if credentials are set up
+if [ ! -f ~/.copilot_auth ]; then
+    echo "Error: Credentials not found at ~/.copilot_auth"
+    echo "Please run: bash get_token.sh"
     exit 1
 fi
 

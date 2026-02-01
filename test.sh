@@ -30,18 +30,18 @@ fi
 echo -e "${GREEN}✓ LLM builtin loaded successfully${NC}"
 echo
 
-# Check for token
-if [ -z "$GITHUB_COPILOT_TOKEN" ]; then
-    echo -e "${RED}Error: GITHUB_COPILOT_TOKEN not set${NC}"
+# Check for credentials file
+if [ ! -f ~/.copilot_auth ]; then
+    echo -e "${RED}Error: Credentials not found at ~/.copilot_auth${NC}"
     echo
-    echo "Please set your GitHub Copilot token:"
-    echo "  export GITHUB_COPILOT_TOKEN='your_token_here'"
+    echo "Please run get_token.sh first:"
+    echo "  bash get_token.sh"
     echo
     echo "See USAGE.md for instructions on how to obtain a token."
     exit 1
 fi
 
-echo -e "${GREEN}✓ GITHUB_COPILOT_TOKEN is set${NC}"
+echo -e "${GREEN}✓ Credentials found at ~/.copilot_auth${NC}"
 echo
 
 # Show help
@@ -53,10 +53,14 @@ echo
 echo -e "${YELLOW}Testing with a simple question...${NC}"
 echo -e "${GREEN}Running: llm What is 2+2?${NC}"
 echo
-llm What is 2+2?
-echo
-
-echo -e "${GREEN}Test complete!${NC}"
+if llm What is 2+2?; then
+    echo
+    echo -e "${GREEN}Test complete!${NC}"
+else
+    echo
+    echo -e "${RED}Test failed!${NC}"
+    exit 1
+fi
 echo
 echo "You can now use the llm builtin:"
 echo "  - Ask questions: llm How do I list files in bash?"
@@ -64,4 +68,3 @@ echo "  - Interactive mode: llm -i"
 echo
 echo "To load automatically, add this to your ~/.bashrc:"
 echo "  enable -f $(pwd)/build/src/llm.so llm"
-echo "  export GITHUB_COPILOT_TOKEN='your_token_here'"
