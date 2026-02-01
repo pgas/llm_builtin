@@ -180,7 +180,207 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
   }
 }
 
-// Get valid copilot token, refreshing if needed
+// Get device code for OAuth flow
+static bool get_device_code(std::string& device_code, std::string& user_code, 
+                             std::string& verification_uri, int& interval) {
+  CURL *curl = curl_easy_init();
+  if (!curl) {
+    fprintf(stderr, "Failed to initialize curl\n");
+    return false;
+  }
+  
+  ResponseData response;
+  const char* client_id = "Iv1.b507a08c87ecfe98";  // GitHub Copilot CLI OAuth Client ID
+  
+  std::string payload = "{\"client_id\":\"" + std::string(client_id) + "\",\"scope\":\"read:user\"}";
+  
+  struct curl_slist *headers = NULL;
+  headers = curl_slist_append(headers, "Accept: application/json");
+  headers = curl_slist_append(headers, "Content-Type: application/json");
+  
+  curl_easy_setopt(curl, CURLOPT_URL, "https://github.com/login/device/code");
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+  
+  CURLcode res = curl_easy_perform(curl);
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+  
+  if (res != CURLE_OK) {
+    fprintf(stderr, "Failed to get device code: %s\n", curl_easy_strerror(res));
+    return false;
+  }
+  
+  try {
+    json response_obj = json::parse(response.data);
+    
+    if (!response_obj.contains("device_code")) {
+      fprintf(stderr, "Error: Failed to get device code\n");
+      return false;
+    }
+    
+    device_code = response_obj["device_code"].get<std::string>();
+    user_code = response_obj["user_code"].get<std::string>();
+    verification_uri = response_obj["verification_uri"].get<std::string>();
+    interval = response_obj.value("interval", 5);
+    
+    return true;
+  } catch (const json::exception& e) {
+    fprintf(stderr, "Error parsing device code response: %s\n", e.what());
+    return false;
+  }
+}
+
+// Poll for access token after user authorizes
+static bool poll_for_access_token(const std::string& device_code, std::string& access_token) {
+  CURL *curl;
+  CURLcode res;
+  const char* client_id = "Iv1.b507a08c87ecfe98";
+  
+  int max_attempts = 120;  // 10 minutes max
+  int interval = 5;
+  
+  for (int attempt = 0; attempt < max_attempts; attempt++) {
+    sleep(interval);
+    
+    curl = curl_easy_init();
+    if (!curl) {
+      fprintf(stderr, "Failed to initialize curl\n");
+      return false;
+    }
+    
+    ResponseData response;
+    std::string payload = "{\"client_id\":\"" + std::string(client_id) + 
+                          "\",\"device_code\":\"" + device_code + 
+                          "\",\"grant_type\":\"urn:ietf:params:oauth:grant-type:device_code\"}";
+    
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Accept: application/json");
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    
+    curl_easy_setopt(curl, CURLOPT_URL, "https://github.com/login/oauth/access_token");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    
+    res = curl_easy_perform(curl);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    
+    if (res != CURLE_OK) {
+      continue;
+    }
+    
+    try {
+      json response_obj = json::parse(response.data);
+      
+      if (response_obj.contains("access_token") && !response_obj["access_token"].is_null()) {
+        access_token = response_obj["access_token"].get<std::string>();
+        return true;
+      }
+      
+      std::string error = response_obj.value("error", "");
+      if (error == "authorization_pending") {
+        fprintf(stderr, ".");
+        fflush(stderr);
+        continue;
+      } else if (error == "slow_down") {
+        interval += 5;
+        fprintf(stderr, ".");
+        fflush(stderr);
+        continue;
+      } else if (!error.empty()) {
+        fprintf(stderr, "\nError: %s\n", error.c_str());
+        return false;
+      }
+    } catch (const json::exception& e) {
+      continue;
+    }
+  }
+  
+  fprintf(stderr, "\nTimeout waiting for authorization\n");
+  return false;
+}
+
+// Authenticate using GitHub device flow
+static bool authenticate_with_github(std::string& copilot_token, std::string& access_token) {
+  fprintf(stderr, "\n[Step 1/4] Requesting device code from GitHub...\n");
+  
+  std::string device_code, user_code, verification_uri;
+  int interval = 5;
+  
+  if (!get_device_code(device_code, user_code, verification_uri, interval)) {
+    return false;
+  }
+  
+  fprintf(stderr, "\n[Step 2/4] Authorization required\n");
+  fprintf(stderr, "==================================\n\n");
+  fprintf(stderr, "Please visit: %s\n", verification_uri.c_str());
+  fprintf(stderr, "And enter code: %s\n\n", user_code.c_str());
+  fprintf(stderr, "Waiting for authorization");
+  fflush(stderr);
+  
+  if (!poll_for_access_token(device_code, access_token)) {
+    return false;
+  }
+  
+  fprintf(stderr, "\n✓ GitHub access token obtained\n\n");
+  fprintf(stderr, "[Step 3/4] Fetching GitHub Copilot token...\n");
+  
+  CURL *curl = curl_easy_init();
+  if (!curl) {
+    fprintf(stderr, "Failed to initialize curl\n");
+    return false;
+  }
+  
+  ResponseData response;
+  std::string auth_header = "Authorization: token " + access_token;
+  
+  struct curl_slist *headers = NULL;
+  headers = curl_slist_append(headers, "User-Agent: llm-builtin/1.0");
+  headers = curl_slist_append(headers, "Accept: application/json");
+  headers = curl_slist_append(headers, auth_header.c_str());
+  
+  curl_easy_setopt(curl, CURLOPT_URL, "https://api.github.com/copilot_internal/v2/token");
+  curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+  
+  CURLcode res = curl_easy_perform(curl);
+  curl_slist_free_all(headers);
+  curl_easy_cleanup(curl);
+  
+  if (res != CURLE_OK) {
+    fprintf(stderr, "Failed to get Copilot token: %s\n", curl_easy_strerror(res));
+    return false;
+  }
+  
+  try {
+    json response_obj = json::parse(response.data);
+    
+    if (!response_obj.contains("token") || response_obj["token"].is_null()) {
+      fprintf(stderr, "Error: Failed to get Copilot token\n");
+      if (response_obj.contains("message")) {
+        fprintf(stderr, "GitHub API response: %s\n", response_obj["message"].get<std::string>().c_str());
+      }
+      fprintf(stderr, "Note: You need an active GitHub Copilot subscription\n");
+      return false;
+    }
+    
+    copilot_token = response_obj["token"].get<std::string>();
+    fprintf(stderr, "✓ GitHub Copilot token obtained\n\n");
+    
+    return true;
+  } catch (const json::exception& e) {
+    fprintf(stderr, "Error parsing Copilot token response: %s\n", e.what());
+    return false;
+  }
+}
+
+// Get valid copilot token, refreshing if needed, and authenticate if necessary
 static bool get_copilot_token(std::string& copilot_token) {
   std::string access_token;
   time_t expires_at;
@@ -200,14 +400,28 @@ static bool get_copilot_token(std::string& copilot_token) {
     if (refresh_copilot_token(copilot_token, access_token, expires_at)) {
       return true;
     } else {
-      fprintf(stderr, "Error: Failed to refresh token. Please run: bash get_token.sh\n");
+      fprintf(stderr, "Token refresh failed, re-authenticating...\n");
+      if (authenticate_with_github(copilot_token, access_token)) {
+        time_t now = time(nullptr);
+        return save_credentials(copilot_token, access_token, now + 3600);
+      }
       return false;
     }
   }
   
-  // No credentials file found
-  fprintf(stderr, "Error: No credentials found at ~/.copilot_auth\n");
-  fprintf(stderr, "Please run: bash get_token.sh\n");
+  // No credentials file found, start authentication flow
+  fprintf(stderr, "\n=== First Time Setup ===\n");
+  fprintf(stderr, "No GitHub Copilot credentials found. Starting authentication...\n");
+  
+  if (authenticate_with_github(copilot_token, access_token)) {
+    fprintf(stderr, "[Step 4/4] Saving credentials...\n");
+    time_t now = time(nullptr);
+    if (save_credentials(copilot_token, access_token, now + 3600)) {
+      fprintf(stderr, "✓ Credentials saved to ~/.copilot_auth\n\n");
+      return true;
+    }
+  }
+  
   return false;
 }
 
@@ -433,8 +647,8 @@ const char *llm_doc[] = {
   "  llm -i    # Start interactive chat",
   "",
   "Setup:",
-  "  Run once: bash get_token.sh",
-  "  Token will be auto-refreshed as needed.",
+  "  On first use, you will be prompted to authenticate with GitHub.",
+  "  Tokens are automatically refreshed as needed.",
   (char *)NULL
 };
 

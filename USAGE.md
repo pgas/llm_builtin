@@ -34,22 +34,17 @@ Or add to your `.bashrc`:
 enable -f /usr/local/lib/bas/llm.so llm
 ```
 
-## Getting GitHub Copilot Token
+## Authentication
 
-You'll need a GitHub Copilot subscription to use this builtin. Use the provided script to authenticate:
+You'll need a GitHub Copilot subscription to use this builtin. On first use, the builtin will automatically guide you through GitHub's OAuth device flow:
 
-```bash
-./get_token.sh
-```
+1. You'll be shown a verification URL and a code
+2. Visit the URL in your browser and enter the code
+3. Authorize the application
+4. The builtin will fetch your GitHub Copilot token
+5. Credentials are saved to `~/.copilot_auth` with secure permissions (600)
 
-This script will:
-1. Guide you through GitHub's OAuth device flow
-2. Open a browser for you to authenticate
-3. Fetch your GitHub Copilot token
-4. Save both your OAuth access token and Copilot token to `~/.copilot_auth`
-5. Set file permissions to 600 (secure)
-
-The credentials will be stored locally and the builtin will automatically refresh your Copilot token as needed (tokens expire after 1 hour but the long-lived access token allows automatic refresh).
+The credentials are stored locally and the builtin will automatically refresh your Copilot token as needed (tokens expire after 1 hour but the long-lived access token allows automatic refresh).
 
 ## Token Management
 
@@ -71,13 +66,10 @@ Your credentials are automatically managed by the builtin:
 After building the project:
 
 ```bash
-# Generate and save credentials
-bash get_token.sh
-
 # Load the builtin into bash
 enable -f ./build/src/llm.so llm
 
-# Start using it!
+# Start using it! (will prompt for authentication on first use)
 llm What is the capital of France?
 ```
 
@@ -143,23 +135,10 @@ llm -i
 ## Troubleshooting
 
 ### Credentials Not Found
-If you see:
-```
-Error: No credentials found at ~/.copilot_auth
-```
-
-Run the token generator script:
-```bash
-bash get_token.sh
-```
+If the builtin can't find credentials, it will automatically prompt you to authenticate on your next use.
 
 ### Token Expired
-The builtin automatically handles expired tokens by refreshing them. If you see token-related errors, try:
-```bash
-bash get_token.sh
-```
-
-This will update your credentials file with new tokens.
+The builtin automatically handles token expiration by refreshing them using the stored access token. No manual action needed.
 
 ### Connection Errors
 Make sure you have internet connectivity and can reach the GitHub API:

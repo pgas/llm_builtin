@@ -30,20 +30,6 @@ fi
 echo -e "${GREEN}✓ LLM builtin loaded successfully${NC}"
 echo
 
-# Check for credentials file
-if [ ! -f ~/.copilot_auth ]; then
-    echo -e "${RED}Error: Credentials not found at ~/.copilot_auth${NC}"
-    echo
-    echo "Please run get_token.sh first:"
-    echo "  bash get_token.sh"
-    echo
-    echo "See USAGE.md for instructions on how to obtain a token."
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Credentials found at ~/.copilot_auth${NC}"
-echo
-
 # Show help
 echo -e "${YELLOW}Builtin help:${NC}"
 help llm

@@ -20,15 +20,9 @@ make
 enable -f /path/to/llm_builtin/build/src/llm.so llm
 ```
 
-### 3. Generate Credentials
+### 3. Start Chatting
 
-```bash
-bash /path/to/llm_builtin/get_token.sh
-```
-
-This script will guide you through GitHub's OAuth flow and save your credentials to `~/.copilot_auth`. The builtin will automatically refresh your token as needed.
-
-### 4. Start Chatting
+On first use, the builtin will automatically prompt you to authenticate with GitHub.
 
 ```bash
 # Ask a question
@@ -63,7 +57,6 @@ Examples:
 ## Documentation
 
 See [USAGE.md](USAGE.md) for complete documentation including:
-- How to obtain a GitHub Copilot token
 - Detailed usage examples
 - Troubleshooting guide
 - Advanced usage patterns
