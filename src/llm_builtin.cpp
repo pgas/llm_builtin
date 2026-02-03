@@ -42,6 +42,11 @@ typedef struct _hist_entry {
 
 extern HIST_ENTRY **history_list(void);
 extern char* ttyname(int fd);
+
+// Forward declarations from bashhist.h for history management
+extern int check_add_history(char *, int);
+extern int remember_on_history;
+extern int enable_history_list;
 }
 
 // Global LLM provider instance
@@ -355,6 +360,15 @@ static int send_chat_message(const std::string& message) {
 
           std::string tool_output;
           if (ch == 'a' || ch == 'A') {
+            // Add command to bash history (respects HISTCONTROL and HISTIGNORE)
+            if (remember_on_history && enable_history_list) {
+              char *hist_line = strdup(command.c_str());
+              if (hist_line) {
+                check_add_history(hist_line, 0);
+                free(hist_line);
+              }
+            }
+            
             int status = system(command.c_str());
             if (status != 0) {
               std::cerr << "Command exited with status " << status << "\n";
