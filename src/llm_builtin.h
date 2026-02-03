@@ -1,5 +1,5 @@
-#ifndef LLM_H
-#define LLM_H
+#ifndef LLM_BUILTIN_H
+#define LLM_BUILTIN_H
 
 #include "builtins.h"
 
@@ -14,4 +14,4 @@ extern struct builtin llm_struct;
 }
 #endif
 
-#endif /* LLM_H */
+#endif /* LLM_BUILTIN_H */

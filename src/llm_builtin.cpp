@@ -1,0 +1,394 @@
+/* LLM Chat builtin - Interact with LLM providers (GitHub Copilot, etc.) */
+
+#include "llm_builtin.h"
+#include "llm_provider.h"
+#include "copilot_provider.h"
+#include <config.h>
+
+#if defined (HAVE_UNISTD_H)
+#  include <unistd.h>
+#endif
+
+#include <sys/stat.h>
+#include <errno.h>
+#include <string.h>
+#include <stdlib.h>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <iostream>
+#include <fstream>
+#include <memory>
+#include <nlohmann/json.hpp>
+
+using json = nlohmann::json;
+
+extern "C" {
+#include "builtins.h"
+#include "shell.h"
+#include "bashgetopt.h"
+#include "common.h"
+
+// Forward declarations from readline/history.h
+typedef struct _hist_entry {
+  char *line;
+  char *timestamp;
+  void *data;
+} HIST_ENTRY;
+
+extern HIST_ENTRY **history_list(void);
+extern char* ttyname(int fd);
+}
+
+// Global LLM provider instance
+static std::unique_ptr<LLMProvider> g_provider;
+
+// In-memory chat history for the current shell session
+static std::vector<json> g_chat_history;
+
+// Get the last N entries from bash history
+static std::vector<std::string> get_bash_history(int limit = 10) {
+  std::vector<std::string> history_entries;
+  
+  HIST_ENTRY **hlist = history_list();
+  if (!hlist) {
+    return history_entries;
+  }
+  
+  int total = 0;
+  while (hlist[total]) {
+    total++;
+  }
+  
+  limit += 1; // last command is llm itself, skip it
+  int start_idx = (total > limit) ? (total - limit) : 0;
+  
+  for (int i = start_idx; i < total-1; i++) {
+    if (hlist[i] && hlist[i]->line) {
+      history_entries.push_back(std::string(hlist[i]->line));
+    }
+  }
+  
+  return history_entries;
+}
+
+// Get base directory for builtin files
+static std::string get_llm_dir_path() {
+  const char *home = getenv("HOME");
+  if (!home) {
+    home = "/root";
+  }
+  return std::string(home) + "/.bash_llm";
+}
+
+// Get path to custom instructions file
+static std::string get_instructions_file_path() {
+  return get_llm_dir_path() + "/instructions.txt";
+}
+
+// Ensure custom instructions file exists with defaults
+static void ensure_instructions_file() {
+  std::string instructions_dir = get_llm_dir_path();
+  std::string instructions_file = get_instructions_file_path();
+
+  if (mkdir(instructions_dir.c_str(), 0700) != 0 && errno != EEXIST) {
+    std::cerr << "Warning: Cannot create directory " << instructions_dir << "\n";
+    return;
+  }
+
+  std::ifstream existing(instructions_file);
+  if (existing.is_open()) {
+    existing.close();
+    return;
+  }
+
+  std::ofstream file(instructions_file);
+  if (!file.is_open()) {
+    std::cerr << "Warning: Cannot write to " << instructions_file << "\n";
+    return;
+  }
+
+  file << "# Custom instructions for llm builtin\n";
+  file << "# Edit this file to change default behavior for all chats.\n";
+  file << "# Lines starting with # are comments.\n";
+  file << "\n";
+  file << "You are a bash/shell scripting expert assistant.\n";
+  file << "The user is interacting with you from a command-line terminal.\n";
+  file << "\n";
+  file << "Response guidelines:\n";
+  file << "- Provide concise, actionable answers optimized for terminal viewing\n";
+  file << "- For commands: give working examples with brief explanations\n";
+  file << "- Use plain text formatting (no markdown code blocks with ```)\n";
+  file << "- Prefer one-liners and pipelines when appropriate\n";
+  file << "- Include safety warnings for destructive operations\n";
+  file << "- Assume Linux/Unix environment unless specified otherwise\n";
+  file.close();
+
+  chmod(instructions_file.c_str(), 0600);
+}
+
+static std::string trim_whitespace(const std::string& input) {
+  size_t start = input.find_first_not_of(" \t\n\r");
+  if (start == std::string::npos) {
+    return "";
+  }
+  size_t end = input.find_last_not_of(" \t\n\r");
+  return input.substr(start, end - start + 1);
+}
+
+static std::string load_instructions() {
+  std::string instructions_file = get_instructions_file_path();
+  std::ifstream file(instructions_file);
+  if (!file.is_open()) {
+    return "";
+  }
+
+  std::ostringstream ss;
+  std::string line;
+  while (std::getline(file, line)) {
+    if (!line.empty() && line[0] == '#') {
+      continue;
+    }
+    ss << line << "\n";
+  }
+
+  return trim_whitespace(ss.str());
+}
+
+// Send a chat message using the LLM provider
+static int send_chat_message(const std::string& message) {
+  if (!g_provider) {
+    std::cerr << "Error: LLM provider not initialized\n";
+    return EXECUTION_FAILURE;
+  }
+  
+  std::string instructions = load_instructions();
+  
+  // Append bash history context to system message
+  std::string system_message = instructions;
+  std::vector<std::string> bash_history = get_bash_history(10);
+  if (!bash_history.empty()) {
+    if (!system_message.empty()) {
+      system_message += "\n\n";
+    }
+    system_message += "Recent shell commands:\n";
+    for (const auto& cmd : bash_history) {
+      system_message += "  " + cmd + "\n";
+    }
+  }
+  
+  std::string response;
+  if (!g_provider->send_message(message, g_chat_history, system_message, response)) {
+    return EXECUTION_FAILURE;
+  }
+  
+  std::cout << response << "\n" << std::flush;
+
+  // Update history after successful response
+  g_chat_history.push_back({
+    {"role", "user"},
+    {"content", message}
+  });
+  g_chat_history.push_back({
+    {"role", "assistant"},
+    {"content", response}
+  });
+  
+  return EXECUTION_SUCCESS;
+}
+
+// Interactive chat mode
+static int interactive_chat(bool is_tty) {
+  const char *cyan = "\033[36m";
+  const char *green = "\033[32m";
+  const char *yellow = "\033[33m";
+  const char *bold = "\033[1m";
+  const char *reset = "\033[0m";
+
+  std::ifstream input("/dev/stdin");
+
+  std::string message;
+  while (true) {
+  
+    std::cout << green << bold << "> " << reset << std::flush;
+    
+    if (!std::getline(input, message)) {
+      break;
+    }
+    
+    message = trim_whitespace(message);
+    
+    if (message.empty()) {
+      continue;
+    }
+    
+    if (message == "/exit" || message == "/quit") {
+      break;
+    }
+    
+    if (message == "/new") {
+      g_chat_history.clear();
+      std::cout << yellow << bold << "New chat started." << reset << "\n\n";
+      continue;
+    }
+    
+    if (message == "/help") {
+      std::cout << bold << cyan << "Commands" << reset << "\n";
+      std::cout << "  " << bold << "/help" << reset << "   Show this help\n";
+      std::cout << "  " << bold << "/new" << reset << "    Start a new chat (clear history)\n";
+      std::cout << "  " << bold << "/exit" << reset << "   Exit interactive mode\n";
+      std::cout << "  " << bold << "/quit" << reset << "   Exit interactive mode\n\n";
+      continue;
+    }
+    
+    if (send_chat_message(message) != EXECUTION_SUCCESS) {
+      std::cerr << "Failed to send message\n";
+    }
+  }
+
+  return EXECUTION_SUCCESS;
+}
+
+// Non-tty interactive mode: read each stdin line as a prompt
+static int interactive_chat_pipe() {
+  std::ifstream input("/dev/stdin");
+  std::string message;
+  while (std::getline(input, message)) {
+    message = trim_whitespace(message);
+    if (message.empty()) {
+      continue;
+    }
+    if (send_chat_message(message) != EXECUTION_SUCCESS) {
+      std::cerr << "Failed to send message\n";
+    }
+  }
+
+  return EXECUTION_SUCCESS;
+}
+
+extern "C" {
+  
+int
+llm_builtin (WORD_LIST *list)
+{
+  // Ensure instructions file exists on first use
+  static bool first_run = true;
+  if (first_run) {
+    ensure_instructions_file();
+    first_run = false;
+  }
+
+  // Check if stdin is connected to a tty
+  int is_tty = ttyname(0) != nullptr ? 1 : 0;
+  int opt;
+  int interactive = 0;
+  int new_chat = 0;
+  std::string message;
+  const char *opt_string = "in";
+  
+  reset_internal_getopt();
+  while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
+    switch (opt) {
+      case 'i':
+        interactive = 1;
+        break;
+      case 'n':
+        new_chat = 1;
+        break;
+      CASE_HELPOPT;
+      default:
+        builtin_usage();
+        return (EX_USAGE);
+    }
+  }
+  list = loptend;
+
+  if (new_chat) {
+    g_chat_history.clear();
+  }
+  
+  if (is_tty && (interactive || list == nullptr)) {
+       return interactive_chat(true);
+  }
+  if (interactive) {
+    return interactive_chat_pipe();
+  }
+  
+  // Collect all arguments as the message
+  std::stringstream ss;
+  while (list) {
+    ss << list->word->word;
+    list = list->next;
+    if (list) {
+      ss << " ";
+    }
+  }
+  
+  // add input to the prompt
+  if (!is_tty){
+    std::ifstream input("/dev/stdin");
+    std::string line;
+    while (std::getline(input, line)) {
+      ss << "\n" << line;
+    }
+  }
+
+  message = ss.str();
+  
+  return send_chat_message(message);
+}
+
+int
+llm_builtin_load (char *s)
+{
+  // Initialize the LLM provider (currently hardcoded to Copilot)
+  // In the future, this could be configurable via environment variable or config file
+  g_provider = std::make_unique<CopilotProvider>();
+  
+  if (!g_provider->initialize()) {
+    std::cerr << "Failed to initialize LLM provider\n";
+    return 0;
+  }
+  
+  ensure_instructions_file();
+  return 1;
+}
+
+void
+llm_builtin_unload (char *s)
+{
+  if (g_provider) {
+    g_provider->cleanup();
+    g_provider.reset();
+  }
+}
+
+const char *llm_doc[] = {
+  "Chat with LLM provider (GitHub Copilot).",
+  "",
+  "Usage: llm [-i] [-n] [message...]",
+  "",
+  "Options:",
+  "  -i    Interactive chat mode",
+  "  -n    Start a new chat (clear conversation history)",
+  "",
+  "Examples:",
+  "  llm What is the capital of France?",
+  "  llm -i    # Start interactive chat",
+  "",
+  "Setup:",
+  "  On first use, you will be prompted to authenticate with GitHub.",
+  "  Tokens are automatically refreshed as needed.",
+  (char *)NULL
+};
+
+struct builtin llm_struct __attribute__((visibility("default"))) = {
+  const_cast<char*>("llm"),		
+  llm_builtin,		
+  BUILTIN_ENABLED,	
+  const_cast<char* const*>(llm_doc),		
+  const_cast<char*>("llm [-i] [message...]"),		
+  0			
+};
+
+}

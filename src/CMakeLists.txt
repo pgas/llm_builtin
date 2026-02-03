@@ -31,7 +31,10 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
 endif()
 
 # Create the shared library
-add_library(llm MODULE llm.cpp)
+add_library(llm MODULE 
+    llm_builtin.cpp
+    copilot_provider.cpp
+)
 
 # Link against curl and nlohmann/json
 target_link_libraries(llm PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)

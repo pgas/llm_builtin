@@ -1,83 +1,18 @@
-/* LLM Chat builtin - Interact with GitHub Copilot */
+/* GitHub Copilot LLM Provider Implementation */
 
-#include "llm.h"
-#include <config.h>
-
-#if defined (HAVE_UNISTD_H)
-#  include <unistd.h>
-#endif
-
-#include <sys/stat.h>
-#include <errno.h>
-#include <string.h>
-#include <stdlib.h>
+#include "copilot_provider.h"
 #include <curl/curl.h>
-#include <string>
-#include <vector>
-#include <sstream>
 #include <iostream>
 #include <fstream>
-#include <ctime>
-#include <nlohmann/json.hpp>
-
-using json = nlohmann::json;
-
-extern "C" {
-#include "builtins.h"
-#include "shell.h"
-#include "bashgetopt.h"
-#include "common.h"
-
-// Forward declarations from readline/history.h
-// This is not public, so may break in future versions of readline
-typedef struct _hist_entry {
-  char *line;
-  char *timestamp;
-  void *data;
-} HIST_ENTRY;
-
-extern HIST_ENTRY **history_list(void);
-
-extern char* ttyname(int fd);
-}
+#include <sstream>
+#include <sys/stat.h>
+#include <errno.h>
+#include <unistd.h>
 
 // Structure to hold response data from curl
 struct ResponseData {
   std::string data;
 };
-
-// In-memory chat history for the current shell session
-static std::vector<json> g_chat_history;
-
-// Get the last N entries from bash history
-// Returns a vector of history entries (most recent last)
-static std::vector<std::string> get_bash_history(int limit = 10) {
-  std::vector<std::string> history_entries;
-  
-  // Get the history list from readline
-  HIST_ENTRY **hlist = history_list();
-  if (!hlist) {
-    return history_entries;
-  }
-  
-  // Count total entries
-  int total = 0;
-  while (hlist[total]) {
-    total++;
-  }
-  // Calculate start index (to get the last 'limit' entries)
-  limit += 1; // last command is llm itself, skip it
-  int start_idx = (total > limit) ? (total - limit) : 0;
-  
-  // Collect the entries
-  for (int i = start_idx; i < total-1; i++) {
-    if (hlist[i] && hlist[i]->line) {
-      history_entries.push_back(std::string(hlist[i]->line));
-    }
-  }
-  
-  return history_entries;
-}
 
 // Callback function for curl to write response data
 static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -87,15 +22,44 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
   return total_size;
 }
 
-// Parse expiration time from Copilot token
-// Token format: tid=...;exp=1234567890;sku=...
-static time_t parse_token_expiration(const std::string& copilot_token) {
+CopilotProvider::CopilotProvider() {
+}
+
+CopilotProvider::~CopilotProvider() {
+}
+
+bool CopilotProvider::initialize() {
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    return true;
+}
+
+void CopilotProvider::cleanup() {
+    curl_global_cleanup();
+}
+
+std::string CopilotProvider::get_provider_name() const {
+    return "GitHub Copilot";
+}
+
+std::string CopilotProvider::get_llm_dir_path() {
+  const char *home = getenv("HOME");
+  if (!home) {
+    home = "/root";
+  }
+  return std::string(home) + "/.bash_llm";
+}
+
+std::string CopilotProvider::get_auth_file_path() {
+  return get_llm_dir_path() + "/copilot_auth.json";
+}
+
+time_t CopilotProvider::parse_token_expiration(const std::string& copilot_token) {
   size_t exp_pos = copilot_token.find("exp=");
   if (exp_pos == std::string::npos) {
-    return 0;  // No expiration found
+    return 0;
   }
   
-  size_t exp_start = exp_pos + 4;  // Skip "exp="
+  size_t exp_start = exp_pos + 4;
   size_t exp_end = copilot_token.find(';', exp_start);
   
   std::string exp_str;
@@ -112,96 +76,7 @@ static time_t parse_token_expiration(const std::string& copilot_token) {
   }
 }
 
-// Get base directory for builtin files
-static std::string get_llm_dir_path() {
-  const char *home = getenv("HOME");
-  if (!home) {
-    home = "/root";
-  }
-  return std::string(home) + "/.bash_llm";
-}
-
-// Get path to credentials file
-static std::string get_auth_file_path() {
-  return get_llm_dir_path() + "/copilot_auth.json";
-}
-
-// Get path to custom instructions file
-static std::string get_instructions_file_path() {
-  return get_llm_dir_path() + "/instructions.txt";
-}
-
-// Ensure custom instructions file exists with defaults
-static void ensure_instructions_file() {
-  std::string instructions_dir = get_llm_dir_path();
-  std::string instructions_file = get_instructions_file_path();
-
-  if (mkdir(instructions_dir.c_str(), 0700) != 0 && errno != EEXIST) {
-    std::cerr << "Warning: Cannot create directory " << instructions_dir << "\n";
-    return;
-  }
-
-  std::ifstream existing(instructions_file);
-  if (existing.is_open()) {
-    existing.close();
-    return;
-  }
-
-  std::ofstream file(instructions_file);
-  if (!file.is_open()) {
-    std::cerr << "Warning: Cannot write to " << instructions_file << "\n";
-    return;
-  }
-
-  file << "# Custom instructions for llm builtin\n";
-  file << "# Edit this file to change default behavior for all chats.\n";
-  file << "# Lines starting with # are comments.\n";
-  file << "\n";
-  file << "You are a bash/shell scripting expert assistant.\n";
-  file << "The user is interacting with you from a command-line terminal.\n";
-  file << "\n";
-  file << "Response guidelines:\n";
-  file << "- Provide concise, actionable answers optimized for terminal viewing\n";
-  file << "- For commands: give working examples with brief explanations\n";
-  file << "- Use plain text formatting (no markdown code blocks with ```)\n";
-  file << "- Prefer one-liners and pipelines when appropriate\n";
-  file << "- Include safety warnings for destructive operations\n";
-  file << "- Assume Linux/Unix environment unless specified otherwise\n";
-  file.close();
-
-  chmod(instructions_file.c_str(), 0600);
-}
-
-static std::string trim_whitespace(const std::string& input) {
-  size_t start = input.find_first_not_of(" \t\n\r");
-  if (start == std::string::npos) {
-    return "";
-  }
-  size_t end = input.find_last_not_of(" \t\n\r");
-  return input.substr(start, end - start + 1);
-}
-
-static std::string load_instructions() {
-  std::string instructions_file = get_instructions_file_path();
-  std::ifstream file(instructions_file);
-  if (!file.is_open()) {
-    return "";
-  }
-
-  std::ostringstream ss;
-  std::string line;
-  while (std::getline(file, line)) {
-    if (!line.empty() && line[0] == '#') {
-      continue;
-    }
-    ss << line << "\n";
-  }
-
-  return trim_whitespace(ss.str());
-}
-
-// Load credentials from ~/.bash_llm/copilot_auth.json
-static bool load_credentials(std::string& copilot_token, std::string& access_token, time_t& expires_at) {
+bool CopilotProvider::load_credentials(std::string& copilot_token, std::string& access_token, time_t& expires_at) {
   std::string auth_file = get_auth_file_path();
   std::ifstream file(auth_file);
   
@@ -221,7 +96,6 @@ static bool load_credentials(std::string& copilot_token, std::string& access_tok
     copilot_token = auth_data["copilot_token"].get<std::string>();
     access_token = auth_data["access_token"].get<std::string>();
     
-    // Handle expires_at as either integer or string
     if (auth_data["expires_at"].is_number()) {
       expires_at = auth_data["expires_at"].get<time_t>();
     } else if (auth_data["expires_at"].is_string()) {
@@ -236,8 +110,7 @@ static bool load_credentials(std::string& copilot_token, std::string& access_tok
   }
 }
 
-// Save credentials to ~/.bash_llm/copilot_auth.json
-static bool save_credentials(const std::string& copilot_token, const std::string& access_token, time_t expires_at) {
+bool CopilotProvider::save_credentials(const std::string& copilot_token, const std::string& access_token, time_t expires_at) {
   std::string auth_file = get_auth_file_path();
 
   if (mkdir(get_llm_dir_path().c_str(), 0700) != 0 && errno != EEXIST) {
@@ -260,14 +133,12 @@ static bool save_credentials(const std::string& copilot_token, const std::string
   file << auth_data.dump();
   file.close();
   
-  // Set permissions to 600 (read/write for owner only)
   chmod(auth_file.c_str(), 0600);
   
   return true;
 }
 
-// Refresh copilot token using access token
-static bool refresh_copilot_token(std::string& copilot_token, const std::string& access_token, time_t& expires_at) {
+bool CopilotProvider::refresh_copilot_token(std::string& copilot_token, const std::string& access_token, time_t& expires_at) {
   CURL *curl;
   CURLcode res;
   ResponseData response;
@@ -279,7 +150,6 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
     return false;
   }
   
-  // Prepare authorization header
   std::string auth_header = "Authorization: token " + access_token;
   
   struct curl_slist *headers = NULL;
@@ -305,7 +175,6 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
     return false;
   }
   
-  // Check HTTP response code
   if (http_code != 200) {
     std::cerr << "Error: GitHub API returned HTTP " << http_code << "\n";
     std::cerr << "Response: " << response.data << "\n";
@@ -325,14 +194,12 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
     
     copilot_token = response_obj["token"].get<std::string>();
     
-    // Use expires_at from API response if available, otherwise default to 1 hour
     if (response_obj.contains("expires_at")) {
       expires_at = response_obj["expires_at"].get<time_t>();
     } else {
-      expires_at = time(nullptr) + 3600;  // Token valid for 1 hour
+      expires_at = time(nullptr) + 3600;
     }
     
-    // Save updated token
     return save_credentials(copilot_token, access_token, expires_at);
   } catch (const json::exception& e) {
     std::cerr << "Error parsing token response: " << e.what() << "\n";
@@ -341,9 +208,8 @@ static bool refresh_copilot_token(std::string& copilot_token, const std::string&
   }
 }
 
-// Get device code for OAuth flow
-static bool get_device_code(std::string& device_code, std::string& user_code, 
-                             std::string& verification_uri, int& interval) {
+bool CopilotProvider::get_device_code(std::string& device_code, std::string& user_code, 
+                                       std::string& verification_uri, int& interval) {
   CURL *curl = curl_easy_init();
   if (!curl) {
     std::cerr << "Failed to initialize curl\n";
@@ -351,7 +217,7 @@ static bool get_device_code(std::string& device_code, std::string& user_code,
   }
   
   ResponseData response;
-  const char* client_id = "Iv1.b507a08c87ecfe98";  // GitHub Copilot CLI OAuth Client ID
+  const char* client_id = "Iv1.b507a08c87ecfe98";
   
   std::string payload = "{\"client_id\":\"" + std::string(client_id) + "\",\"scope\":\"read:user\"}";
   
@@ -394,13 +260,12 @@ static bool get_device_code(std::string& device_code, std::string& user_code,
   }
 }
 
-// Poll for access token after user authorizes
-static bool poll_for_access_token(const std::string& device_code, std::string& access_token) {
+bool CopilotProvider::poll_for_access_token(const std::string& device_code, std::string& access_token) {
   CURL *curl;
   CURLcode res;
   const char* client_id = "Iv1.b507a08c87ecfe98";
   
-  int max_attempts = 120;  // 10 minutes max
+  int max_attempts = 120;
   int interval = 5;
   
   for (int attempt = 0; attempt < max_attempts; attempt++) {
@@ -466,8 +331,7 @@ static bool poll_for_access_token(const std::string& device_code, std::string& a
   return false;
 }
 
-// Authenticate using GitHub device flow
-static bool authenticate_with_github(std::string& copilot_token, std::string& access_token, time_t& expires_at) {
+bool CopilotProvider::authenticate_with_github(std::string& copilot_token, std::string& access_token, time_t& expires_at) {
   std::cerr << "\n[Step 1/4] Requesting device code from GitHub...\n";
   
   std::string device_code, user_code, verification_uri;
@@ -533,11 +397,10 @@ static bool authenticate_with_github(std::string& copilot_token, std::string& ac
     
     copilot_token = response_obj["token"].get<std::string>();
     
-    // Use expires_at from API response if available, otherwise default to 1 hour
     if (response_obj.contains("expires_at")) {
       expires_at = response_obj["expires_at"].get<time_t>();
     } else {
-      expires_at = time(nullptr) + 3600;  // Token valid for 1 hour
+      expires_at = time(nullptr) + 3600;
     }
     
     std::cerr << "✓ GitHub Copilot token obtained\n\n";
@@ -549,28 +412,19 @@ static bool authenticate_with_github(std::string& copilot_token, std::string& ac
   }
 }
 
-// Get valid copilot token, refreshing if needed, and authenticate if necessary
-static bool get_copilot_token(std::string& copilot_token) {
+bool CopilotProvider::get_copilot_token(std::string& copilot_token) {
   std::string access_token;
   time_t expires_at;
   
-  // Try to load existing credentials
   if (load_credentials(copilot_token, access_token, expires_at)) {
     time_t now = time(nullptr);
-    
-    // Parse actual expiration from token itself
     time_t token_expiration = parse_token_expiration(copilot_token);
-    
-    // Use the token's actual expiration if available, otherwise use stored expires_at
     time_t actual_expiration = (token_expiration > 0) ? token_expiration : expires_at;
     
-    // Check if token is expired or expiring within 5 minutes
     if (now < actual_expiration - 300) {
-      // Token still valid
       return true;
     }
     
-    // Token expired or expiring soon, refresh it
     if (refresh_copilot_token(copilot_token, access_token, expires_at)) {
       return true;
     } else {
@@ -581,7 +435,6 @@ static bool get_copilot_token(std::string& copilot_token) {
     }
   }
   
-  // No credentials file found, start authentication flow
   std::cerr << "\n=== First Time Setup ===\n";
   std::cerr << "No GitHub Copilot credentials found. Starting authentication...\n";
   
@@ -596,22 +449,25 @@ static bool get_copilot_token(std::string& copilot_token) {
   return false;
 }
 
-// Extract content from streaming SSE response
-static std::string extract_content_from_sse(const std::string& response) {
+bool CopilotProvider::authenticate() {
+  std::string token;
+  return get_copilot_token(token);
+}
+
+std::string CopilotProvider::extract_content_from_sse(const std::string& response) {
   std::stringstream ss(response);
   std::string line;
   std::string full_content;
   
   while (std::getline(ss, line)) {
     if (line.find("data: ") == 0) {
-      std::string json_data = line.substr(6); // Remove "data: " prefix
+      std::string json_data = line.substr(6);
       
       if (json_data == "[DONE]") {
         break;
       }
       
       try {
-        // Parse JSON and extract content
         json response_obj = json::parse(json_data);
         if (response_obj.contains("choices") && response_obj["choices"].is_array() && 
             response_obj["choices"].size() > 0) {
@@ -621,7 +477,6 @@ static std::string extract_content_from_sse(const std::string& response) {
           }
         }
       } catch (const json::exception& e) {
-        // Skip lines that aren't valid JSON
         continue;
       }
     }
@@ -630,41 +485,25 @@ static std::string extract_content_from_sse(const std::string& response) {
   return full_content;
 }
 
-// Send a chat message to GitHub Copilot
-static int send_chat_message(const std::string& message) {
-  std::string token;
+bool CopilotProvider::send_message(
+    const std::string& message,
+    const std::vector<json>& history,
+    const std::string& system_message,
+    std::string& response) {
   
-  // Get valid copilot token (will refresh if needed)
+  std::string token;
   if (!get_copilot_token(token)) {
-    return EXECUTION_FAILURE;
+    return false;
   }
   
-  CURL *curl;
-  CURLcode res;
-  ResponseData response;
-  
-  curl = curl_easy_init();
+  CURL *curl = curl_easy_init();
   if (!curl) {
     std::cerr << "Failed to initialize curl\n";
-    return EXECUTION_FAILURE;
+    return false;
   }
   
-  // Build JSON payload using nlohmann/json
+  ResponseData curl_response;
   json messages = json::array();
-  std::string instructions = load_instructions();
-  
-  // Append bash history context to system message
-  std::string system_message = instructions;
-  std::vector<std::string> bash_history = get_bash_history(10);
-  if (!bash_history.empty()) {
-    if (!system_message.empty()) {
-      system_message += "\n\n";
-    }
-    system_message += "Recent shell commands:\n";
-    for (const auto& cmd : bash_history) {
-      system_message += "  " + cmd + "\n";
-    }
-  }
   
   if (!system_message.empty()) {
     messages.push_back({
@@ -672,9 +511,11 @@ static int send_chat_message(const std::string& message) {
       {"content", system_message}
     });
   }
-  for (const auto& msg : g_chat_history) {
+  
+  for (const auto& msg : history) {
     messages.push_back(msg);
   }
+  
   messages.push_back({
     {"role", "user"},
     {"content", message}
@@ -688,7 +529,6 @@ static int send_chat_message(const std::string& message) {
   
   std::string payload = payload_obj.dump();
   
-  // Set up curl
   struct curl_slist *headers = NULL;
   headers = curl_slist_append(headers, "Content-Type: application/json");
   std::string auth_header = "Authorization: Bearer " + token;
@@ -700,231 +540,27 @@ static int send_chat_message(const std::string& message) {
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &curl_response);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
   
-  res = curl_easy_perform(curl);
+  CURLcode res = curl_easy_perform(curl);
   
   curl_slist_free_all(headers);
   curl_easy_cleanup(curl);
   
   if (res != CURLE_OK) {
     std::cerr << "curl_easy_perform() failed: " << curl_easy_strerror(res) << "\n";
-    return EXECUTION_FAILURE;
+    return false;
   }
   
-  // Extract and print the content
-  std::string content = extract_content_from_sse(response.data);
+  response = extract_content_from_sse(curl_response.data);
   
-  if (content.empty()) {
+  if (response.empty()) {
     std::cerr << "Error: No content received or failed to parse response\n";
-    std::cerr << "Response: " << response.data << "\n";
-    return EXECUTION_FAILURE;
+    std::cerr << "Response: " << curl_response.data << "\n";
+    return false;
   }
   
-  std::cout << content << "\n" << std::flush;
-
-  // Update history after successful response
-  g_chat_history.push_back({
-    {"role", "user"},
-    {"content", message}
-  });
-  g_chat_history.push_back({
-    {"role", "assistant"},
-    {"content", content}
-  });
-  
-  return EXECUTION_SUCCESS;
-}
-
-// Interactive chat mode
-static int interactive_chat(bool is_tty) {
-  const char *cyan = "\033[36m";
-  const char *green = "\033[32m";
-  const char *yellow = "\033[33m";
-  const char *bold = "\033[1m";
-  const char *reset = "\033[0m";
-
-  std::ifstream input("/dev/stdin");
-
-  std::string message;
-  while (true) {
-  
-    std::cout << green << bold << "> " << reset << std::flush;
-    
-    if (!std::getline(input, message)) {
-      break;
-    }
-    
-    // Trim whitespace
-    message = trim_whitespace(message);
-    
-    if (message.empty()) {
-      continue;
-    }
-    
-    // Only process commands if connected to a tty
-    if (message == "/exit" || message == "/quit") {
-      break;
-    }
-    
-    if (message == "/new") {
-      g_chat_history.clear();
-      std::cout << yellow << bold << "New chat started." << reset << "\n\n";
-      continue;
-    }
-    
-    if (message == "/help") {
-      std::cout << bold << cyan << "Commands" << reset << "\n";
-      std::cout << "  " << bold << "/help" << reset << "   Show this help\n";
-      std::cout << "  " << bold << "/new" << reset << "    Start a new chat (clear history)\n";
-      std::cout << "  " << bold << "/exit" << reset << "   Exit interactive mode\n";
-      std::cout << "  " << bold << "/quit" << reset << "   Exit interactive mode\n\n";
-      continue;
-    }
-    
-    // Send message and wait for response before processing next line
-    if (send_chat_message(message) != EXECUTION_SUCCESS) {
-      std::cerr << "Failed to send message\n";
-      // Continue processing remaining lines even on error
-    }
-  }
-
-  return EXECUTION_SUCCESS;
-}
-
-// Non-tty interactive mode: read each stdin line as a prompt
-static int interactive_chat_pipe() {
-  std::ifstream input("/dev/stdin");
-  std::string message;
-  while (std::getline(input, message)) {
-    message = trim_whitespace(message);
-    if (message.empty()) {
-      continue;
-    }
-    // Send message and wait for response before processing next line
-    if (send_chat_message(message) != EXECUTION_SUCCESS) {
-      std::cerr << "Failed to send message\n";
-      // Continue processing remaining lines even on error
-    }
-  }
-
-  return EXECUTION_SUCCESS;
-}
-extern "C" {
-  
-int
-llm_builtin (WORD_LIST *list)
-{
-  // Ensure instructions file exists on first use
-  static bool first_run = true;
-  if (first_run) {
-    ensure_instructions_file();
-    first_run = false;
-  }
-
-  // Check if stdin is connected to a tty
-  // If so, automatically enable interactive mode
-  int is_tty = ttyname(0) != nullptr ? 1 : 0;
-  int opt;
-  int interactive = 0;
-  int new_chat = 0;
-  std::string message;
-  const char *opt_string = "in";
-  
-  reset_internal_getopt();
-  while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
-    switch (opt) {
-      case 'i':
-        interactive = 1;
-        break;
-      case 'n':
-        new_chat = 1;
-        break;
-      CASE_HELPOPT;
-      default:
-        builtin_usage();
-        return (EX_USAGE);
-    }
-  }
-  list = loptend;
-
-  if (new_chat) {
-    g_chat_history.clear();
-  }
-  
-  if (is_tty && (interactive || list == nullptr)) {
-       return interactive_chat(true);
-  }
-  if (interactive) {
-    return interactive_chat_pipe();
-  }
-  
-  // Collect all arguments as the message
-  std::stringstream ss;
-  while (list) {
-    ss << list->word->word;
-    list = list->next;
-    if (list) {
-      ss << " ";
-    }
-  }
-  
-  // add input to the prompt
-  if (!is_tty){
-    std::ifstream input("/dev/stdin");
-    std::string line;
-    while (std::getline(input, line)) {
-      ss << "\n" << line;
-    }
-  }
-
-  message = ss.str();
-  
-  return send_chat_message(message);
-}
-
-int
-llm_builtin_load (char *s)
-{
-  curl_global_init(CURL_GLOBAL_DEFAULT);
-  ensure_instructions_file();
-  return (1);
-}
-
-void
-llm_builtin_unload (char *s)
-{
-  curl_global_cleanup();
-}
-
-const char *llm_doc[] = {
-  "Chat with GitHub Copilot LLM.",
-  "",
-  "Usage: llm [-i] [-n] [message...]",
-  "",
-  "Options:",
-  "  -i    Interactive chat mode",
-  "  -n    Start a new chat (clear conversation history)",
-  "",
-  "Examples:",
-  "  llm What is the capital of France?",
-  "  llm -i    # Start interactive chat",
-  "",
-  "Setup:",
-  "  On first use, you will be prompted to authenticate with GitHub.",
-  "  Tokens are automatically refreshed as needed.",
-  (char *)NULL
-};
-
-
-  struct builtin llm_struct __attribute__((visibility("default"))) = {
-    const_cast<char*>("llm"),		
-    llm_builtin,		
-    BUILTIN_ENABLED,	
-    const_cast<char* const*>(llm_doc),		
-    const_cast<char*>("llm [-i] [message...]"),		
-    0			
-  };
+  return true;
 }
