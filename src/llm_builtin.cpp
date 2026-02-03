@@ -274,14 +274,42 @@ static int send_chat_message(const std::string& message) {
   if (tool_calls.is_array() && !tool_calls.empty()) {
     for (const auto& tool_call : tool_calls) {
       std::cout << "🔧 ";  // Unicode tool/wrench symbol
-      
+
       if (tool_call.contains("function")) {
         const auto& func = tool_call["function"];
         std::string func_name = func.contains("name") ? func["name"].get<std::string>() : "unknown";
         std::string func_args = func.contains("arguments") ? func["arguments"].get<std::string>() : "{}";
-        
-        std::cout << "Function Call: " << func_name << "\n";
-        std::cout << "Arguments: " << func_args << "\n";
+
+        if (func_name == "run_shell_command") {
+          std::string command;
+          try {
+            json args = json::parse(func_args);
+            if (args.contains("command") && args["command"].is_string()) {
+              command = args["command"].get<std::string>();
+            }
+          } catch (const std::exception&) {
+            // fall back to raw arguments
+          }
+
+          if (command.empty()) {
+            command = func_args;
+          }
+
+          std::cout << command << "\n";
+          std::cout << "Execute? (y/N) " << std::flush;
+
+          std::string confirm;
+          if (std::getline(std::cin, confirm)) {
+            if (!confirm.empty() && (confirm[0] == 'y' || confirm[0] == 'Y')) {
+              int status = system(command.c_str());
+              if (status != 0) {
+                std::cerr << "Command exited with status " << status << "\n";
+              }
+            }
+          }
+        } else {
+          std::cout << tool_call.dump(2) << "\n";
+        }
       } else {
         std::cout << tool_call.dump(2) << "\n";
       }
