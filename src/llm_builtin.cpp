@@ -11,6 +11,8 @@
 #endif
 
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <termios.h>
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
@@ -19,6 +21,7 @@
 #include <sstream>
 #include <iostream>
 #include <fstream>
+#include <cstdio>
 #include <memory>
 #include <nlohmann/json.hpp>
 
@@ -265,11 +268,31 @@ static int send_chat_message(const std::string& message) {
     return EXECUTION_FAILURE;
   }
   
-  // Display regular response if present
+  // Update history first
+  g_chat_history.push_back({
+    {"role", "user"},
+    {"content", message}
+  });
+  
+  json assistant_msg = {
+    {"role", "assistant"}
+  };
+  
+  if (!response.empty()) {
+    assistant_msg["content"] = response;
+  }
+  
+  if (tool_calls.is_array() && !tool_calls.empty()) {
+    assistant_msg["tool_calls"] = tool_calls;
+  }
+  
+  g_chat_history.push_back(assistant_msg);
+
+  // Display regular response if present (BEFORE tool execution)
   if (!response.empty()) {
     std::cout << response << "\n" << std::flush;
   }
-  
+
   // Display tool_calls if present (with unicode tool symbol)
   if (tool_calls.is_array() && !tool_calls.empty()) {
     for (const auto& tool_call : tool_calls) {
@@ -295,17 +318,50 @@ static int send_chat_message(const std::string& message) {
             command = func_args;
           }
 
-          std::cout << command << "\n";
-          std::cout << "Execute? (y/N) " << std::flush;
+          std::string tool_call_id = tool_call.contains("id") && tool_call["id"].is_string()
+            ? tool_call["id"].get<std::string>()
+            : "";
 
-          std::string confirm;
-          if (std::getline(std::cin, confirm)) {
-            if (!confirm.empty() && (confirm[0] == 'y' || confirm[0] == 'Y')) {
-              int status = system(command.c_str());
-              if (status != 0) {
-                std::cerr << "Command exited with status " << status << "\n";
-              }
+          std::cout << "Run the following command?\n";
+          std::cout << command << "\n";
+          std::cout << "(A)llow/(S)kip " << std::flush;
+
+          char ch = '\0';
+          // Try to read a single character from /dev/tty
+          int tty_fd = open("/dev/tty", O_RDONLY);
+          if (tty_fd >= 0) {
+            struct termios old_tio, new_tio;
+            tcgetattr(tty_fd, &old_tio);
+            new_tio = old_tio;
+            new_tio.c_lflag &= ~(ICANON | ECHO);
+            tcsetattr(tty_fd, TCSANOW, &new_tio);
+            
+            ssize_t n = read(tty_fd, &ch, 1);
+            (void)n;  // Suppress unused result warning
+            
+            tcsetattr(tty_fd, TCSANOW, &old_tio);
+            close(tty_fd);
+            std::cout << "\n";
+          }
+
+          std::string tool_output;
+          if (ch == 'a' || ch == 'A') {
+            int status = system(command.c_str());
+            if (status != 0) {
+              std::cerr << "Command exited with status " << status << "\n";
             }
+            tool_output = "Command executed successfully with exit status " + std::to_string(status);
+          } else {
+            tool_output = "Command execution skipped by user.";
+          }
+
+          // Add tool response to history
+          if (!tool_call_id.empty()) {
+            g_chat_history.push_back({
+              {"role", "tool"},
+              {"tool_call_id", tool_call_id},
+              {"content", tool_output}
+            });
           }
         } else {
           std::cout << tool_call.dump(2) << "\n";
@@ -316,26 +372,6 @@ static int send_chat_message(const std::string& message) {
     }
     std::cout << std::flush;
   }
-
-  // Update history after successful response
-  g_chat_history.push_back({
-    {"role", "user"},
-    {"content", message}
-  });
-  
-  json assistant_msg = {
-    {"role", "assistant"}
-  };
-  
-  if (!response.empty()) {
-    assistant_msg["content"] = response;
-  }
-  
-  if (tool_calls.is_array() && !tool_calls.empty()) {
-    assistant_msg["tool_calls"] = tool_calls;
-  }
-  
-  g_chat_history.push_back(assistant_msg);
   
   return EXECUTION_SUCCESS;
 }
