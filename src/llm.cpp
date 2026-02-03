@@ -1,5 +1,6 @@
 /* LLM Chat builtin - Interact with GitHub Copilot */
 
+#include "llm.h"
 #include <config.h>
 
 #if defined (HAVE_UNISTD_H)
@@ -811,7 +812,8 @@ static int interactive_chat_pipe() {
 
   return EXECUTION_SUCCESS;
 }
-
+extern "C" {
+  
 int
 llm_builtin (WORD_LIST *list)
 {
@@ -916,11 +918,13 @@ const char *llm_doc[] = {
   (char *)NULL
 };
 
-struct builtin llm_struct = {
-  const_cast<char*>("llm"),		
-  llm_builtin,		
-  BUILTIN_ENABLED,	
-  const_cast<char* const*>(llm_doc),		
-  const_cast<char*>("llm [-i] [message...]"),		
-  0			
-};
+
+  struct builtin llm_struct __attribute__((visibility("default"))) = {
+    const_cast<char*>("llm"),		
+    llm_builtin,		
+    BUILTIN_ENABLED,	
+    const_cast<char* const*>(llm_doc),		
+    const_cast<char*>("llm [-i] [message...]"),		
+    0			
+  };
+}
