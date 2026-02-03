@@ -64,12 +64,14 @@ Options:
   -i    Start interactive chat mode
   -n    Start a new chat (clear conversation history)
   -r    Reload configuration from ~/.bash_llm/config.json
+  -m    Override the model for this session
   -h    Show help with current provider and model
 
 Examples:
   llm What is the capital of France?
   llm Explain what this bash command does: find . -name "*.txt"
   llm -i    # Start interactive chat
+  llm -m gpt-4o-mini  # Use a specific model for this session
   llm -h    # Show help and configuration
   llm -r    # Reload configuration after editing config.json
   

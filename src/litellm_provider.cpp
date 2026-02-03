@@ -52,6 +52,10 @@ std::string LiteLLMProvider::get_model_name() const {
     return model_name_;
 }
 
+void LiteLLMProvider::set_model(const std::string& model_name) {
+    model_name_ = model_name;
+}
+
 std::string LiteLLMProvider::get_llm_dir_path() {
   const char *home = getenv("HOME");
   if (!home) {

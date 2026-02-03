@@ -59,6 +59,12 @@ public:
      * @return Model name (e.g., "gpt-4", "claude-3-sonnet")
      */
     virtual std::string get_model_name() const = 0;
+    
+    /**
+     * Set the model name to use.
+     * @param model_name The model name to use
+     */
+    virtual void set_model(const std::string& model_name) = 0;
 };
 
 #endif /* LLM_PROVIDER_H */

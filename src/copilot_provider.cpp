@@ -22,7 +22,8 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
   return total_size;
 }
 
-CopilotProvider::CopilotProvider() {
+CopilotProvider::CopilotProvider() 
+    : model_name_("gpt-4o") {
 }
 
 CopilotProvider::~CopilotProvider() {
@@ -30,6 +31,10 @@ CopilotProvider::~CopilotProvider() {
 
 bool CopilotProvider::initialize() {
     curl_global_init(CURL_GLOBAL_DEFAULT);
+    
+    // Load configuration if available
+    load_config();
+    
     return true;
 }
 
@@ -42,7 +47,11 @@ std::string CopilotProvider::get_provider_name() const {
 }
 
 std::string CopilotProvider::get_model_name() const {
-    return "gpt-4o";
+    return model_name_;
+}
+
+void CopilotProvider::set_model(const std::string& model_name) {
+    model_name_ = model_name;
 }
 
 std::string CopilotProvider::get_llm_dir_path() {
@@ -55,6 +64,39 @@ std::string CopilotProvider::get_llm_dir_path() {
 
 std::string CopilotProvider::get_auth_file_path() {
   return get_llm_dir_path() + "/copilot_auth.json";
+}
+
+std::string CopilotProvider::get_config_file_path() {
+  return get_llm_dir_path() + "/config.json";
+}
+
+bool CopilotProvider::load_config() {
+    std::string config_file = get_config_file_path();
+    std::ifstream file(config_file);
+    
+    if (!file.is_open()) {
+        // Config file doesn't exist, use defaults
+        return true;
+    }
+    
+    try {
+        json config_data;
+        file >> config_data;
+        
+        // Read from the "copilot" section of the config
+        if (config_data.contains("copilot") && config_data["copilot"].is_object()) {
+            json copilot_config = config_data["copilot"];
+            
+            if (copilot_config.contains("model")) {
+                model_name_ = copilot_config["model"].get<std::string>();
+            }
+        }
+        
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "Warning: Failed to parse copilot config: " << e.what() << "\n";
+        return false;
+    }
 }
 
 time_t CopilotProvider::parse_token_expiration(const std::string& copilot_token) {
@@ -527,7 +569,7 @@ bool CopilotProvider::send_message(
 
   json payload_obj = {
     {"messages", messages},
-    {"model", "gpt-4"},
+    {"model", model_name_},
     {"stream", true}
   };
   

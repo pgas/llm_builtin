@@ -1,5 +1,8 @@
 {
   "provider": "copilot",
+  "copilot": {
+    "model": "gpt-4o"
+  },
   "litellm": {
     "base_url": "http://localhost:8000",
     "model": "gpt-3.5-turbo",

@@ -25,6 +25,7 @@ public:
         std::string& response) override;
     std::string get_provider_name() const override;
     std::string get_model_name() const override;
+    void set_model(const std::string& model_name);
 
 private:
     // Credential management
@@ -46,6 +47,13 @@ private:
     // File paths
     std::string get_llm_dir_path();
     std::string get_auth_file_path();
+    std::string get_config_file_path();
+    
+    // Configuration
+    bool load_config();
+    
+    // Member variables
+    std::string model_name_;
 };
 
 #endif /* COPILOT_PROVIDER_H */

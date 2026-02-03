@@ -285,10 +285,28 @@ static int interactive_chat(bool is_tty) {
       continue;
     }
     
+    if (message.substr(0, 6) == "/model") {
+      if (message == "/model") {
+        // Show current model
+        std::cout << cyan << "Current model: " << bold << g_provider->get_model_name() << reset << "\n\n";
+      } else {
+        // Switch model
+        std::string new_model = trim_whitespace(message.substr(6));
+        if (!new_model.empty()) {
+          g_provider->set_model(new_model);
+          std::cout << yellow << bold << "Switched to model: " << new_model << reset << "\n\n";
+        } else {
+          std::cout << "Usage: /model <model_name>\n\n";
+        }
+      }
+      continue;
+    }
+    
     if (message == "/help") {
       std::cout << bold << cyan << "Commands" << reset << "\n";
       std::cout << "  " << bold << "/help" << reset << "   Show this help\n";
       std::cout << "  " << bold << "/new" << reset << "    Start a new chat (clear history)\n";
+      std::cout << "  " << bold << "/model" << reset << "  Show current model or switch: /model <name>\n";
       std::cout << "  " << bold << "/exit" << reset << "   Exit interactive mode\n";
       std::cout << "  " << bold << "/quit" << reset << "   Exit interactive mode\n\n";
       continue;
@@ -345,7 +363,8 @@ llm_builtin (WORD_LIST *list)
   int reload = 0;
   int show_help = 0;
   std::string message;
-  const char *opt_string = "inrh";
+  std::string model_override;
+  const char *opt_string = "inrhm:";
   
   reset_internal_getopt();
   while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
@@ -361,6 +380,9 @@ llm_builtin (WORD_LIST *list)
         break;
       case 'h':
         show_help = 1;
+        break;
+      case 'm':
+        model_override = list_optarg;
         break;
       CASE_HELPOPT;
       default:
@@ -379,6 +401,11 @@ llm_builtin (WORD_LIST *list)
     return EXECUTION_SUCCESS;
   }
   
+  // Apply model override if specified
+  if (!model_override.empty()) {
+    g_provider->set_model(model_override);
+  }
+  
   if (show_help) {
     if (!g_provider) {
       std::cerr << "No provider initialized\n";
@@ -393,17 +420,19 @@ llm_builtin (WORD_LIST *list)
     std::cout << "Current Configuration:\n";
     std::cout << "  Provider: " << cyan << g_provider->get_provider_name() << reset << "\n";
     std::cout << "  Model: " << cyan << g_provider->get_model_name() << reset << "\n\n";
-    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [message...]\n\n";
+    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [-m model] [message...]\n\n";
     std::cout << bold << "Options:" << reset << "\n";
-    std::cout << "  -i    Interactive chat mode\n";
-    std::cout << "  -n    Start a new chat (clear conversation history)\n";
-    std::cout << "  -r    Reload configuration from ~/.bash_llm/config.json\n";
-    std::cout << "  -h    Show this help with current configuration\n\n";
+    std::cout << "  -i          Interactive chat mode\n";
+    std::cout << "  -n          Start a new chat (clear conversation history)\n";
+    std::cout << "  -r          Reload configuration from ~/.bash_llm/config.json\n";
+    std::cout << "  -m model    Override the model for this session\n";
+    std::cout << "  -h          Show this help with current configuration\n\n";
     std::cout << bold << "Examples:" << reset << "\n";
     std::cout << "  llm What is the capital of France?\n";
-    std::cout << "  llm -i    # Start interactive chat\n";
-    std::cout << "  llm -h    # Show this help\n";
-    std::cout << "  llm -r    # Reload configuration\n\n";
+    std::cout << "  llm -i              # Start interactive chat\n";
+    std::cout << "  llm -m gpt-4o-mini  # Use a specific model\n";
+    std::cout << "  llm -h              # Show this help\n";
+    std::cout << "  llm -r              # Reload configuration\n\n";
     std::cout << bold << "Configuration:" << reset << "\n";
     std::cout << "  Edit ~/.bash_llm/config.json to change provider\n";
     std::cout << "  Example: {\"provider\": \"copilot\"} or {\"provider\": \"litellm\"}\n";
@@ -468,23 +497,33 @@ llm_builtin_unload (char *s)
 const char *llm_doc[] = {
   "Chat with LLM provider (GitHub Copilot or LiteLLM).",
   "",
-  "Usage: llm [-i] [-n] [-r] [-h] [message...]",
+  "Usage: llm [-i] [-n] [-r] [-h] [-m model] [message...]",
   "",
   "Options:",
-  "  -i    Interactive chat mode",
-  "  -n    Start a new chat (clear conversation history)",
-  "  -r    Reload configuration from ~/.bash_llm/config.json",
-  "  -h    Show help with current provider and model",
+  "  -i          Interactive chat mode",
+  "  -n          Start a new chat (clear conversation history)",
+  "  -r          Reload configuration from ~/.bash_llm/config.json",
+  "  -m model    Override the model for this session",
+  "  -h          Show help with current provider and model",
   "",
   "Examples:",
   "  llm What is the capital of France?",
-  "  llm -i    # Start interactive chat",
-  "  llm -h    # Show help and configuration",
-  "  llm -r    # Reload configuration",
+  "  llm -i              # Start interactive chat",
+  "  llm -m gpt-4o-mini  # Use a specific model",
+  "  llm -h              # Show help and configuration",
+  "  llm -r              # Reload configuration",
+  "",
+  "Interactive Commands:",
+  "  /help         Show available commands",
+  "  /new          Start a new chat (clear history)",
+  "  /model        Show current model",
+  "  /model <name> Switch to a different model",
+  "  /exit, /quit  Exit interactive mode",
   "",
   "Configuration:",
-  "  Edit ~/.bash_llm/config.json to change provider.",
-  "  Example: {\"provider\": \"copilot\"} or {\"provider\": \"litellm\"}",
+  "  Edit ~/.bash_llm/config.json to change provider and default model.",
+  "  Example: {\"provider\": \"copilot\", \"copilot\": {\"model\": \"gpt-4o\"}}",
+  "  Example: {\"provider\": \"litellm\", \"litellm\": {\"model\": \"gpt-4\"}}",
   "  On first use with copilot, you will be prompted to authenticate with GitHub.",
   (char *)NULL
 };
@@ -494,7 +533,7 @@ struct builtin llm_struct __attribute__((visibility("default"))) = {
   llm_builtin,		
   BUILTIN_ENABLED,	
   const_cast<char* const*>(llm_doc),		
-  const_cast<char*>("llm [-i] [-n] [-r] [-h] [message...]"),		
+  const_cast<char*>("llm [-i] [-n] [-r] [-h] [-m model] [message...]"),		
   0			
 };
 

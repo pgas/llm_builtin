@@ -44,7 +44,10 @@ Create or edit `~/.bash_llm/config.json` to select your provider:
 
 ```json
 {
-  "provider": "copilot"
+  "provider": "copilot",
+  "copilot": {
+    "model": "gpt-4o"
+  }
 }
 ```
 
@@ -160,13 +163,14 @@ enable -f /path/to/llm_builtin/build/src/llm.so llm
 ### Command Options
 
 ```bash
-llm [-i] [-n] [-r] [-h] [message...]
+llm [-i] [-n] [-r] [-h] [-m model] [message...]
 ```
 
 Options:
 - `-i`: Start interactive chat mode
 - `-n`: Start a new chat (clear conversation history)
 - `-r`: Reload configuration from `~/.bash_llm/config.json`
+- `-m`: Override the model for this session
 - `-h`: Show help with current provider and model
 
 ### Single Question Mode
@@ -177,6 +181,7 @@ Ask a question directly:
 llm What is the capital of France?
 llm How do I list all files recursively in bash?
 llm "Explain what this means: $(cat somefile.txt)"
+llm -m gpt-4o-mini "Summarize this error: $(cat error.log)"
 ```
 
 ### Show Configuration
@@ -219,6 +224,14 @@ Copilot: [Response from Copilot]
 
 You: exit
 ```
+
+#### Interactive Commands
+
+- `/help`: Show available commands
+- `/new`: Start a new chat (clear history)
+- `/model`: Show current model
+- `/model <name>`: Switch to a different model
+- `/exit`, `/quit`: Exit interactive mode
 
 #### Interactive Mode with Piped Input
 

@@ -24,6 +24,7 @@ public:
         std::string& response) override;
     std::string get_provider_name() const override;
     std::string get_model_name() const override;
+    void set_model(const std::string& model_name) override;
 
 private:
     // Configuration

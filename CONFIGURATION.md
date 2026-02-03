@@ -18,6 +18,17 @@ Minimal configuration for GitHub Copilot:
 }
 ```
 
+Specify a default Copilot model:
+
+```json
+{
+  "provider": "copilot",
+  "copilot": {
+    "model": "gpt-4o"
+  }
+}
+```
+
 ### LiteLLM with Local Server
 
 Configuration for LiteLLM running locally:
@@ -31,6 +42,25 @@ Configuration for LiteLLM running locally:
     "api_key": ""
   }
 }
+```
+
+## Model Selection
+
+You can set a default model per provider in `~/.bash_llm/config.json` and override it per session.
+
+### Per-Session Override
+
+Use `-m` to override the model for the current session:
+
+```bash
+llm -m gpt-4o-mini "Explain this error"
+```
+
+In interactive mode, use `/model` to view or switch models:
+
+```text
+/model
+/model gpt-4o-mini
 ```
 
 ### LiteLLM with Custom Model
