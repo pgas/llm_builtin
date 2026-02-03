@@ -192,6 +192,15 @@ static std::string trim_whitespace(const std::string& input) {
   return input.substr(start, end - start + 1);
 }
 
+// Check if input matches command (supports partial prefix matching)
+// e.g., "/q" matches "/quit", "/h" matches "/help"
+static bool matches_command(const std::string& input, const std::string& command) {
+  if (input.length() > command.length()) {
+    return false;
+  }
+  return command.compare(0, input.length(), input) == 0;
+}
+
 static std::string load_instructions() {
   std::string instructions_file = get_instructions_file_path();
   std::ifstream file(instructions_file);
@@ -401,23 +410,24 @@ static int interactive_chat(bool is_tty) {
       continue;
     }
     
-    if (message == "/exit" || message == "/quit") {
+    if (matches_command(message, "/exit") || matches_command(message, "/quit")) {
       break;
     }
     
-    if (message == "/new") {
+    if (matches_command(message, "/new")) {
       g_chat_history.clear();
       std::cout << yellow << bold << "New chat started." << reset << "\n\n";
       continue;
     }
     
-    if (message.substr(0, 6) == "/model") {
-      if (message == "/model") {
+    if (message[0] == '/' && matches_command(message.substr(0, message.find(' ')), "/model")) {
+      size_t space_pos = message.find(' ');
+      if (space_pos == std::string::npos) {
         // Show current model
         std::cout << cyan << "Current model: " << bold << g_provider->get_model_name() << reset << "\n\n";
       } else {
         // Switch model
-        std::string new_model = trim_whitespace(message.substr(6));
+        std::string new_model = trim_whitespace(message.substr(space_pos));
         if (!new_model.empty()) {
           g_provider->set_model(new_model);
           std::cout << yellow << bold << "Switched to model: " << new_model << reset << "\n\n";
@@ -428,8 +438,8 @@ static int interactive_chat(bool is_tty) {
       continue;
     }
     
-    if (message == "/help") {
-      std::cout << bold << cyan << "Commands" << reset << "\n";
+    if (matches_command(message, "/help")) {
+      std::cout << bold << cyan << "Commands" << reset << " (partial matches work, e.g., /q for /quit)\n";
       std::cout << "  " << bold << "/help" << reset << "   Show this help\n";
       std::cout << "  " << bold << "/new" << reset << "    Start a new chat (clear history)\n";
       std::cout << "  " << bold << "/model" << reset << "  Show current model or switch: /model <name>\n";
@@ -645,6 +655,7 @@ const char *llm_doc[] = {
   "  /model        Show current model",
   "  /model <name> Switch to a different model",
   "  /exit, /quit  Exit interactive mode",
+  "  Note: Partial matches work (e.g., /q for /quit, /h for /help)",
   "",
   "Configuration:",
   "  Edit ~/.bash_llm/config.json to change provider and default model.",
