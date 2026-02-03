@@ -34,6 +34,69 @@ Or add to your `.bashrc`:
 enable -f /usr/local/lib/bas/llm.so llm
 ```
 
+## Configuration
+
+The builtin reads its configuration from `~/.bash_llm/config.json`.
+
+### Provider Selection
+
+Create or edit `~/.bash_llm/config.json` to select your provider:
+
+```json
+{
+  "provider": "copilot"
+}
+```
+
+Or for LiteLLM:
+
+```json
+{
+  "provider": "litellm",
+  "litellm": {
+    "base_url": "http://localhost:8000",
+    "model": "gpt-3.5-turbo",
+    "api_key": "your-api-key"
+  }
+}
+```
+
+### GitHub Copilot (Default)
+
+If no configuration file exists, the builtin defaults to GitHub Copilot:
+
+### LiteLLM
+
+LiteLLM configuration is specified in the same config file:
+
+```json
+{
+  "provider": "litellm",
+  "litellm": {
+    "base_url": "http://localhost:8000",
+    "model": "gpt-3.5-turbo",
+    "api_key": "your-litellm-api-key"
+  }
+}
+```
+
+Configuration options:
+- `base_url`: URL where LiteLLM is running (default: `http://localhost:8000`)
+- `model`: Model to use (default: `gpt-3.5-turbo`)
+- `api_key`: Optional API token for authentication (sent as `Authorization: Bearer <token>`)
+
+After editing the configuration, reload it with:
+
+```bash
+llm -r
+```
+
+The LiteLLM provider expects:
+- A local LiteLLM gateway running at the configured URL
+- OpenAI-compatible API endpoint at `/v1/chat/completions`
+- Health check endpoint at `/health`
+- Optional token-based authentication via `api_key` config
+
 ## Authentication
 
 You'll need a GitHub Copilot subscription to use this builtin. On first use, the builtin will automatically guide you through GitHub's OAuth device flow:
@@ -94,6 +157,18 @@ enable -f /path/to/llm_builtin/build/src/llm.so llm
 
 ## Usage
 
+### Command Options
+
+```bash
+llm [-i] [-n] [-r] [-h] [message...]
+```
+
+Options:
+- `-i`: Start interactive chat mode
+- `-n`: Start a new chat (clear conversation history)
+- `-r`: Reload configuration from `~/.bash_llm/config.json`
+- `-h`: Show help with current provider and model
+
 ### Single Question Mode
 
 Ask a question directly:
@@ -102,6 +177,22 @@ Ask a question directly:
 llm What is the capital of France?
 llm How do I list all files recursively in bash?
 llm "Explain what this means: $(cat somefile.txt)"
+```
+
+### Show Configuration
+
+Check provider and model information:
+
+```bash
+llm -h
+```
+
+Edit your config file and reload:
+
+```bash
+# Edit ~/.bash_llm/config.json to change provider
+llm -r    # Reload configuration
+llm -h    # Confirm new provider and model
 ```
 
 ### Interactive Chat Mode
@@ -261,7 +352,11 @@ enable -d llm
 
 ## Notes
 
-- The builtin uses the GitHub Copilot API which requires an active subscription
+- By default, the builtin uses GitHub Copilot, which requires an active subscription
+- Configure the provider in `~/.bash_llm/config.json`
+- Use `llm -r` to reload configuration after making changes
+- Use `llm -s` to see which provider is currently active
+- For LiteLLM, configure the base URL, model, and API key in the config file
 - Responses are streamed from the API
 - The interactive mode uses simple line input (no advanced readline features)
-- All messages are stateless (no conversation history is maintained between separate invocations)
+- Conversation history is maintained in memory during the shell session

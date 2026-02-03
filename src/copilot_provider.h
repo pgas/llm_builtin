@@ -24,6 +24,7 @@ public:
         const std::string& system_message,
         std::string& response) override;
     std::string get_provider_name() const override;
+    std::string get_model_name() const override;
 
 private:
     // Credential management

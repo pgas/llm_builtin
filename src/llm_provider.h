@@ -53,6 +53,12 @@ public:
      * @return Provider name (e.g., "GitHub Copilot", "OpenAI")
      */
     virtual std::string get_provider_name() const = 0;
+
+    /**
+     * Get the model name being used.
+     * @return Model name (e.g., "gpt-4", "claude-3-sonnet")
+     */
+    virtual std::string get_model_name() const = 0;
 };
 
 #endif /* LLM_PROVIDER_H */

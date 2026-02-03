@@ -3,6 +3,7 @@
 #include "llm_builtin.h"
 #include "llm_provider.h"
 #include "copilot_provider.h"
+#include "litellm_provider.h"
 #include <config.h>
 
 #if defined (HAVE_UNISTD_H)
@@ -84,6 +85,58 @@ static std::string get_llm_dir_path() {
 // Get path to custom instructions file
 static std::string get_instructions_file_path() {
   return get_llm_dir_path() + "/instructions.txt";
+}
+
+// Get path to config file
+static std::string get_config_file_path() {
+  return get_llm_dir_path() + "/config.json";
+}
+
+// Load configuration from JSON file
+static bool load_config() {
+  std::string config_file = get_config_file_path();
+  std::ifstream file(config_file);
+  
+  std::string provider_name = "copilot"; // default
+  
+  if (file.is_open()) {
+    try {
+      json config_data;
+      file >> config_data;
+      
+      if (config_data.contains("provider")) {
+        provider_name = config_data["provider"].get<std::string>();
+      }
+    } catch (const std::exception& e) {
+      std::cerr << "Warning: Failed to parse config file: " << e.what() << "\n";
+      std::cerr << "Using default provider (copilot)\n";
+    }
+  }
+  
+  // Create appropriate provider
+  if (provider_name == "litellm") {
+    g_provider = std::make_unique<LiteLLMProvider>();
+  } else {
+    g_provider = std::make_unique<CopilotProvider>();
+  }
+  
+  if (!g_provider->initialize()) {
+    std::cerr << "Failed to initialize LLM provider\n";
+    g_provider.reset();
+    return false;
+  }
+  
+  return true;
+}
+
+// Reload configuration and reinitialize provider
+static bool reload_config() {
+  if (g_provider) {
+    g_provider->cleanup();
+    g_provider.reset();
+  }
+  g_chat_history.clear();
+  return load_config();
 }
 
 // Ensure custom instructions file exists with defaults
@@ -271,9 +324,15 @@ extern "C" {
 int
 llm_builtin (WORD_LIST *list)
 {
-  // Ensure instructions file exists on first use
+  // Initialize provider if not already initialized (fallback in case load wasn't called)
   static bool first_run = true;
   if (first_run) {
+    if (!g_provider) {
+      if (!load_config()) {
+        return EXECUTION_FAILURE;
+      }
+    }
+    
     ensure_instructions_file();
     first_run = false;
   }
@@ -283,8 +342,10 @@ llm_builtin (WORD_LIST *list)
   int opt;
   int interactive = 0;
   int new_chat = 0;
+  int reload = 0;
+  int show_help = 0;
   std::string message;
-  const char *opt_string = "in";
+  const char *opt_string = "inrh";
   
   reset_internal_getopt();
   while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
@@ -295,6 +356,12 @@ llm_builtin (WORD_LIST *list)
       case 'n':
         new_chat = 1;
         break;
+      case 'r':
+        reload = 1;
+        break;
+      case 'h':
+        show_help = 1;
+        break;
       CASE_HELPOPT;
       default:
         builtin_usage();
@@ -302,6 +369,46 @@ llm_builtin (WORD_LIST *list)
     }
   }
   list = loptend;
+  
+  if (reload) {
+    if (!reload_config()) {
+      std::cerr << "Failed to reload configuration\n";
+      return EXECUTION_FAILURE;
+    }
+    std::cout << "Configuration reloaded. Using provider: " << g_provider->get_provider_name() << "\n";
+    return EXECUTION_SUCCESS;
+  }
+  
+  if (show_help) {
+    if (!g_provider) {
+      std::cerr << "No provider initialized\n";
+      return EXECUTION_FAILURE;
+    }
+    // Display help with provider and model info
+    const char *bold = "\033[1m";
+    const char *reset = "\033[0m";
+    const char *cyan = "\033[36m";
+    
+    std::cout << bold << "LLM Bash Builtin" << reset << "\n\n";
+    std::cout << "Current Configuration:\n";
+    std::cout << "  Provider: " << cyan << g_provider->get_provider_name() << reset << "\n";
+    std::cout << "  Model: " << cyan << g_provider->get_model_name() << reset << "\n\n";
+    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [message...]\n\n";
+    std::cout << bold << "Options:" << reset << "\n";
+    std::cout << "  -i    Interactive chat mode\n";
+    std::cout << "  -n    Start a new chat (clear conversation history)\n";
+    std::cout << "  -r    Reload configuration from ~/.bash_llm/config.json\n";
+    std::cout << "  -h    Show this help with current configuration\n\n";
+    std::cout << bold << "Examples:" << reset << "\n";
+    std::cout << "  llm What is the capital of France?\n";
+    std::cout << "  llm -i    # Start interactive chat\n";
+    std::cout << "  llm -h    # Show this help\n";
+    std::cout << "  llm -r    # Reload configuration\n\n";
+    std::cout << bold << "Configuration:" << reset << "\n";
+    std::cout << "  Edit ~/.bash_llm/config.json to change provider\n";
+    std::cout << "  Example: {\"provider\": \"copilot\"} or {\"provider\": \"litellm\"}\n";
+    return EXECUTION_SUCCESS;
+  }
 
   if (new_chat) {
     g_chat_history.clear();
@@ -341,12 +448,7 @@ llm_builtin (WORD_LIST *list)
 int
 llm_builtin_load (char *s)
 {
-  // Initialize the LLM provider (currently hardcoded to Copilot)
-  // In the future, this could be configurable via environment variable or config file
-  g_provider = std::make_unique<CopilotProvider>();
-  
-  if (!g_provider->initialize()) {
-    std::cerr << "Failed to initialize LLM provider\n";
+  if (!load_config()) {
     return 0;
   }
   
@@ -364,21 +466,26 @@ llm_builtin_unload (char *s)
 }
 
 const char *llm_doc[] = {
-  "Chat with LLM provider (GitHub Copilot).",
+  "Chat with LLM provider (GitHub Copilot or LiteLLM).",
   "",
-  "Usage: llm [-i] [-n] [message...]",
+  "Usage: llm [-i] [-n] [-r] [-h] [message...]",
   "",
   "Options:",
   "  -i    Interactive chat mode",
   "  -n    Start a new chat (clear conversation history)",
+  "  -r    Reload configuration from ~/.bash_llm/config.json",
+  "  -h    Show help with current provider and model",
   "",
   "Examples:",
   "  llm What is the capital of France?",
   "  llm -i    # Start interactive chat",
+  "  llm -h    # Show help and configuration",
+  "  llm -r    # Reload configuration",
   "",
-  "Setup:",
-  "  On first use, you will be prompted to authenticate with GitHub.",
-  "  Tokens are automatically refreshed as needed.",
+  "Configuration:",
+  "  Edit ~/.bash_llm/config.json to change provider.",
+  "  Example: {\"provider\": \"copilot\"} or {\"provider\": \"litellm\"}",
+  "  On first use with copilot, you will be prompted to authenticate with GitHub.",
   (char *)NULL
 };
 
@@ -387,7 +494,7 @@ struct builtin llm_struct __attribute__((visibility("default"))) = {
   llm_builtin,		
   BUILTIN_ENABLED,	
   const_cast<char* const*>(llm_doc),		
-  const_cast<char*>("llm [-i] [message...]"),		
+  const_cast<char*>("llm [-i] [-n] [-r] [-h] [message...]"),		
   0			
 };
 

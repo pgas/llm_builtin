@@ -34,6 +34,7 @@ endif()
 add_library(llm MODULE 
     llm_builtin.cpp
     copilot_provider.cpp
+    litellm_provider.cpp
 )
 
 # Link against curl and nlohmann/json

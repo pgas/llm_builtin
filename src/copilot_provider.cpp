@@ -41,6 +41,10 @@ std::string CopilotProvider::get_provider_name() const {
     return "GitHub Copilot";
 }
 
+std::string CopilotProvider::get_model_name() const {
+    return "gpt-4o";
+}
+
 std::string CopilotProvider::get_llm_dir_path() {
   const char *home = getenv("HOME");
   if (!home) {

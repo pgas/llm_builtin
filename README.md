@@ -1,6 +1,10 @@
-# LLM Bash Builtin - GitHub Copilot Chat
+# LLM Bash Builtin
 
-A bash builtin that enables direct chat interaction with GitHub Copilot's LLM from your terminal.
+A bash builtin that enables direct chat interaction with LLM providers from your terminal.
+
+Supported providers:
+- **GitHub Copilot** (default) - Requires GitHub Copilot subscription
+- **LiteLLM** - Local LLM gateway/proxy
 
 (Written with the help of an llms)
 
@@ -14,15 +18,34 @@ cmake ..
 make
 ```
 
-### 2. Load the Builtin
+### 2. Configure Provider (Optional)
+
+Create a configuration file at `~/.bash_llm/config.json`:
+
+```json
+{
+  "provider": "copilot",
+  "litellm": {
+    "base_url": "http://localhost:8000",
+    "model": "gpt-3.5-turbo",
+    "api_key": "your-litellm-api-key"
+  }
+}
+```
+
+Set `"provider"` to either `"copilot"` (default) or `"litellm"`.
+
+See [config.json.example](config.json.example) for a complete example.
+
+### 3. Load the Builtin
 
 ```bash
 enable -f /path/to/llm_builtin/build/src/llm.so llm
 ```
 
-### 3. Start Chatting
+### 4. Start Chatting
 
-On first use, the builtin will automatically prompt you to authenticate with GitHub.
+On first use with GitHub Copilot, the builtin will automatically prompt you to authenticate with GitHub.
 
 ```bash
 # Ask a question
@@ -39,11 +62,16 @@ llm [options] [message...]
 
 Options:
   -i    Start interactive chat mode
+  -n    Start a new chat (clear conversation history)
+  -r    Reload configuration from ~/.bash_llm/config.json
+  -h    Show help with current provider and model
 
 Examples:
   llm What is the capital of France?
   llm Explain what this bash command does: find . -name "*.txt"
   llm -i    # Start interactive chat
+  llm -h    # Show help and configuration
+  llm -r    # Reload configuration after editing config.json
   
   # Pipe stdin to add context to your message
   cat error.log | llm "Explain this error"
