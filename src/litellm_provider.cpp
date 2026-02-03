@@ -156,7 +156,9 @@ bool LiteLLMProvider::send_message(
     const std::string& message,
     const std::vector<json>& history,
     const std::string& system_message,
-    std::string& response) {
+    const json& tools,
+    std::string& response,
+    json* tool_calls) {
     
     CURL *curl = curl_easy_init();
     if (!curl) {
@@ -191,6 +193,11 @@ bool LiteLLMProvider::send_message(
     messages.push_back(user_msg);
     
     payload["messages"] = messages;
+    
+    // Add tools if provided
+    if (tools.is_array() && tools.size() > 0) {
+        payload["tools"] = tools;
+    }
     
     // Optional parameters
     payload["stream"] = false;
@@ -246,12 +253,24 @@ bool LiteLLMProvider::send_message(
         }
         
         const auto& first_choice = response_json["choices"][0];
-        if (!first_choice.contains("message") || !first_choice["message"].contains("content")) {
-            std::cerr << "Invalid response format: no message content\n";
+        
+        // Extract message content
+        if (first_choice.contains("message")) {
+            const auto& msg = first_choice["message"];
+            
+            if (msg.contains("content") && !msg["content"].is_null()) {
+                response = msg["content"].get<std::string>();
+            }
+            
+            // Extract tool_calls if present
+            if (tool_calls && msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
+                *tool_calls = msg["tool_calls"];
+            }
+        } else {
+            std::cerr << "Invalid response format: no message\n";
             return false;
         }
         
-        response = first_choice["message"]["content"].get<std::string>();
         return true;
         
     } catch (const std::exception& e) {

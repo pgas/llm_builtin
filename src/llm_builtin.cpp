@@ -208,6 +208,32 @@ static std::string load_instructions() {
   return trim_whitespace(ss.str());
 }
 
+// Get predefined tools to include in all requests
+static json get_predefined_tools() {
+  json tools = json::array();
+  
+  // Tool 1: Run shell command
+  tools.push_back({
+    {"type", "function"},
+    {"function", {
+      {"name", "run_shell_command"},
+      {"description", "Execute a shell command in the user's current bash environment. Use this to run commands, check files, execute scripts, or perform system operations. The command will be executed with the user's current environment and permissions."},
+      {"parameters", {
+        {"type", "object"},
+        {"properties", {
+          {"command", {
+            {"type", "string"},
+            {"description", "The shell command to execute. Can be a simple command or a complex pipeline."}
+          }}
+        }},
+        {"required", json::array({"command"})}
+      }}
+    }}
+  });
+  
+  return tools;
+}
+
 // Send a chat message using the LLM provider
 static int send_chat_message(const std::string& message) {
   if (!g_provider) {
@@ -230,22 +256,58 @@ static int send_chat_message(const std::string& message) {
     }
   }
   
+  // Get predefined tools to include in the request
+  json tools = get_predefined_tools();
+  
   std::string response;
-  if (!g_provider->send_message(message, g_chat_history, system_message, response)) {
+  json tool_calls;
+  if (!g_provider->send_message(message, g_chat_history, system_message, tools, response, &tool_calls)) {
     return EXECUTION_FAILURE;
   }
   
-  std::cout << response << "\n" << std::flush;
+  // Display regular response if present
+  if (!response.empty()) {
+    std::cout << response << "\n" << std::flush;
+  }
+  
+  // Display tool_calls if present (with unicode tool symbol)
+  if (tool_calls.is_array() && !tool_calls.empty()) {
+    for (const auto& tool_call : tool_calls) {
+      std::cout << "🔧 ";  // Unicode tool/wrench symbol
+      
+      if (tool_call.contains("function")) {
+        const auto& func = tool_call["function"];
+        std::string func_name = func.contains("name") ? func["name"].get<std::string>() : "unknown";
+        std::string func_args = func.contains("arguments") ? func["arguments"].get<std::string>() : "{}";
+        
+        std::cout << "Function Call: " << func_name << "\n";
+        std::cout << "Arguments: " << func_args << "\n";
+      } else {
+        std::cout << tool_call.dump(2) << "\n";
+      }
+    }
+    std::cout << std::flush;
+  }
 
   // Update history after successful response
   g_chat_history.push_back({
     {"role", "user"},
     {"content", message}
   });
-  g_chat_history.push_back({
-    {"role", "assistant"},
-    {"content", response}
-  });
+  
+  json assistant_msg = {
+    {"role", "assistant"}
+  };
+  
+  if (!response.empty()) {
+    assistant_msg["content"] = response;
+  }
+  
+  if (tool_calls.is_array() && !tool_calls.empty()) {
+    assistant_msg["tool_calls"] = tool_calls;
+  }
+  
+  g_chat_history.push_back(assistant_msg);
   
   return EXECUTION_SUCCESS;
 }

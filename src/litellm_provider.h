@@ -21,7 +21,9 @@ public:
         const std::string& message,
         const std::vector<json>& history,
         const std::string& system_message,
-        std::string& response) override;
+        const json& tools,
+        std::string& response,
+        json* tool_calls = nullptr) override;
     std::string get_provider_name() const override;
     std::string get_model_name() const override;
     void set_model(const std::string& model_name) override;

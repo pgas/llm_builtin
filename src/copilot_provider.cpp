@@ -5,6 +5,7 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <map>
 #include <sys/stat.h>
 #include <errno.h>
 #include <unistd.h>
@@ -500,10 +501,54 @@ bool CopilotProvider::authenticate() {
   return get_copilot_token(token);
 }
 
-std::string CopilotProvider::extract_content_from_sse(const std::string& response) {
+std::string CopilotProvider::extract_content_from_sse(const std::string& response, json* tool_calls = nullptr) {
   std::stringstream ss(response);
   std::string line;
   std::string full_content;
+  
+  // Map to accumulate tool calls by index
+  std::map<int, json> tool_calls_map;
+  int next_tool_index = 0;
+
+  auto merge_tool_calls = [&](const json& tool_calls_array) {
+    if (!tool_calls_array.is_array()) {
+      return;
+    }
+    for (const auto& call : tool_calls_array) {
+      int idx = call.contains("index") ? call["index"].get<int>() : next_tool_index++;
+
+      if (tool_calls_map.find(idx) == tool_calls_map.end()) {
+        tool_calls_map[idx] = {
+          {"id", ""},
+          {"type", "function"},
+          {"function", {
+            {"name", ""},
+            {"arguments", ""}
+          }}
+        };
+      }
+
+      if (call.contains("id")) {
+        tool_calls_map[idx]["id"] = call["id"];
+      }
+      if (call.contains("type")) {
+        tool_calls_map[idx]["type"] = call["type"];
+      }
+      if (call.contains("function")) {
+        const auto& func = call["function"];
+        if (func.contains("name")) {
+          tool_calls_map[idx]["function"]["name"] = func["name"];
+        }
+        if (func.contains("arguments")) {
+          std::string args = func["arguments"].get<std::string>();
+          std::string existing = tool_calls_map[idx]["function"]["arguments"].is_string()
+            ? tool_calls_map[idx]["function"]["arguments"].get<std::string>()
+            : std::string();
+          tool_calls_map[idx]["function"]["arguments"] = existing + args;
+        }
+      }
+    }
+  };
   
   while (std::getline(ss, line)) {
     if (line.find("data: ") == 0) {
@@ -518,14 +563,81 @@ std::string CopilotProvider::extract_content_from_sse(const std::string& respons
         if (response_obj.contains("choices") && response_obj["choices"].is_array() && 
             response_obj["choices"].size() > 0) {
           const auto& choice = response_obj["choices"][0];
+          
+          // Extract content
           if (choice.contains("delta") && choice["delta"].contains("content")) {
             full_content += choice["delta"]["content"].get<std::string>();
+          }
+          
+          // Extract tool_calls from delta (streaming)
+          if (choice.contains("delta")) {
+            if (choice["delta"].contains("tool_calls")) {
+              const auto& delta_tool_calls = choice["delta"]["tool_calls"];
+              merge_tool_calls(delta_tool_calls);
+            }
+          }
+          
+          // Check for finish_reason indicating tool use
+          if (choice.contains("finish_reason") && choice["finish_reason"] == "tool_calls") {
+            if (choice.contains("message") && choice["message"].contains("tool_calls")) {
+              // If we have the complete tool_calls in the message, use that
+              const auto& msg_tool_calls = choice["message"]["tool_calls"];
+              if (msg_tool_calls.is_array()) {
+                tool_calls_map.clear();
+                merge_tool_calls(msg_tool_calls);
+              }
+            }
           }
         }
       } catch (const json::exception& e) {
         continue;
       }
     }
+  }
+  
+  // Fallback: scan raw response for tool_calls if streaming parse missed it
+  if (tool_calls_map.empty()) {
+    size_t pos = 0;
+    while ((pos = response.find("\"tool_calls\"", pos)) != std::string::npos) {
+      size_t array_start = response.find('[', pos);
+      if (array_start == std::string::npos) {
+        break;
+      }
+      int depth = 0;
+      size_t array_end = std::string::npos;
+      for (size_t i = array_start; i < response.size(); ++i) {
+        if (response[i] == '[') {
+          depth++;
+        } else if (response[i] == ']') {
+          depth--;
+          if (depth == 0) {
+            array_end = i;
+            break;
+          }
+        }
+      }
+      if (array_end != std::string::npos) {
+        std::string array_text = response.substr(array_start, array_end - array_start + 1);
+        try {
+          json parsed_array = json::parse(array_text);
+          merge_tool_calls(parsed_array);
+        } catch (const json::exception&) {
+          // ignore and continue
+        }
+        pos = array_end + 1;
+      } else {
+        break;
+      }
+    }
+  }
+
+  // Convert map to array
+  if (tool_calls && !tool_calls_map.empty()) {
+    json extracted_tool_calls = json::array();
+    for (const auto& [idx, call] : tool_calls_map) {
+      extracted_tool_calls.push_back(call);
+    }
+    *tool_calls = extracted_tool_calls;
   }
   
   return full_content;
@@ -535,7 +647,9 @@ bool CopilotProvider::send_message(
     const std::string& message,
     const std::vector<json>& history,
     const std::string& system_message,
-    std::string& response) {
+    const json& tools,
+    std::string& response,
+    json* tool_calls) {
   
   std::string token;
   if (!get_copilot_token(token)) {
@@ -573,6 +687,11 @@ bool CopilotProvider::send_message(
     {"stream", true}
   };
   
+  // Add tools if provided
+  if (tools.is_array() && tools.size() > 0) {
+    payload_obj["tools"] = tools;
+  }
+  
   std::string payload = payload_obj.dump();
   
   struct curl_slist *headers = NULL;
@@ -600,10 +719,14 @@ bool CopilotProvider::send_message(
     return false;
   }
   
-  response = extract_content_from_sse(curl_response.data);
+  response = extract_content_from_sse(curl_response.data, tool_calls);
   
-  if (response.empty()) {
-    std::cerr << "Error: No content received or failed to parse response\n";
+  // Check if we got either content or tool_calls
+  bool has_content = !response.empty();
+  bool has_tool_calls = tool_calls && !tool_calls->is_null() && !tool_calls->empty();
+  
+  if (!has_content && !has_tool_calls) {
+    std::cerr << "Error: No content or tool_calls received\n";
     std::cerr << "Response: " << curl_response.data << "\n";
     return false;
   }

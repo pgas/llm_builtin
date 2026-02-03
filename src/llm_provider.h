@@ -39,14 +39,18 @@ public:
      * @param message The user's message
      * @param history The conversation history
      * @param system_message Optional system message/instructions
+     * @param tools Optional tools/functions available to the LLM
      * @param response Output parameter for the LLM's response
+     * @param tool_calls Output parameter for any tool_calls from the response (optional)
      * @return true on success, false on failure
      */
     virtual bool send_message(
         const std::string& message,
         const std::vector<json>& history,
         const std::string& system_message,
-        std::string& response) = 0;
+        const json& tools,
+        std::string& response,
+        json* tool_calls = nullptr) = 0;
 
     /**
      * Get the name of this provider.
