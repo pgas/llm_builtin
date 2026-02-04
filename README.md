@@ -17,6 +17,8 @@ Supported providers:
 
 (Written with the help of an llms)
 
+![Demo](llm_builtin.gif)
+
 ## Quick Start
 
 ### 1. Build
