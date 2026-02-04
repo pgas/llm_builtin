@@ -630,9 +630,10 @@ llm_builtin (WORD_LIST *list)
   int show_help = 0;
   int completion_mode = 0;
   int force_history = 0;
+  int list_models = 0;
   std::string message;
   std::string model_override;
-  const char *opt_string = "inrhcm:H";
+  const char *opt_string = "inrhcm:Hl";
   
   reset_internal_getopt();
   while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
@@ -658,6 +659,9 @@ llm_builtin (WORD_LIST *list)
       case 'H':
         force_history = 1;
         break;
+      case 'l':
+        list_models = 1;
+        break;
       CASE_HELPOPT;
       default:
         builtin_usage();
@@ -672,6 +676,33 @@ llm_builtin (WORD_LIST *list)
       return EXECUTION_FAILURE;
     }
     std::cout << "Configuration reloaded. Using provider: " << g_provider->get_provider_name() << "\n";
+    return EXECUTION_SUCCESS;
+  }
+  
+  // List available models
+  if (list_models) {
+    if (!g_provider) {
+      std::cerr << "No provider initialized\n";
+      return EXECUTION_FAILURE;
+    }
+    const char *bold = "\033[1m";
+    const char *cyan = "\033[36m";
+    const char *reset = "\033[0m";
+    
+    std::cout << bold << "Available models for " << cyan << g_provider->get_provider_name() << reset << bold << ":" << reset << "\n\n";
+    
+    std::vector<std::string> models = g_provider->get_available_models();
+    std::string current_model = g_provider->get_model_name();
+    
+    for (const auto& model : models) {
+      if (model == current_model) {
+        std::cout << "  " << cyan << "* " << model << " (current)" << reset << "\n";
+      } else {
+        std::cout << "  " << model << "\n";
+      }
+    }
+    std::cout << "\n";
+    std::cout << "Use -m <model> to switch models\n";
     return EXECUTION_SUCCESS;
   }
   
@@ -699,13 +730,14 @@ llm_builtin (WORD_LIST *list)
     std::cout << "Current Configuration:\n";
     std::cout << "  Provider: " << cyan << g_provider->get_provider_name() << reset << "\n";
     std::cout << "  Model: " << cyan << g_provider->get_model_name() << reset << "\n\n";
-    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [-c] [-H] [-m model] [message...]\n\n";
+    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [-c] [-H] [-l] [-m model] [message...]\n\n";
     std::cout << bold << "Options:" << reset << "\n";
     std::cout << "  -i          Interactive chat mode\n";
     std::cout << "  -n          Start a new chat (clear conversation history)\n";
     std::cout << "  -r          Reload configuration from ~/.bash_llm/config.json\n";
     std::cout << "  -c          Completion mode (for use with bind -x)\n";
     std::cout << "  -H          Include bash command history in context\n";
+    std::cout << "  -l          List available models\n";
     std::cout << "  -m model    Override the model for this session\n";
     std::cout << "  -h          Show this help with current configuration\n\n";
     std::cout << bold << "Examples:" << reset << "\n";
@@ -780,7 +812,7 @@ llm_builtin_unload (char *s)
 const char *llm_doc[] = {
   "Chat with LLM provider (GitHub Copilot or LiteLLM).",
   "",
-  "Usage: llm [-i] [-n] [-r] [-h] [-c] [-H] [-m model] [message...]",
+  "Usage: llm [-i] [-n] [-r] [-h] [-c] [-H] [-l] [-m model] [message...]",
   "",
   "Options:",
   "  -i          Interactive chat mode",
@@ -788,6 +820,7 @@ const char *llm_doc[] = {
   "  -r          Reload configuration from ~/.bash_llm/config.json",
   "  -c          Completion mode (for use with bind -x)",
   "  -H          Include bash command history in context",
+  "  -l          List available models",
   "  -m model    Override the model for this session",
   "  -h          Show help with current provider and model",
   "",
@@ -824,7 +857,7 @@ struct builtin llm_struct __attribute__((visibility("default"))) = {
   llm_builtin,		
   BUILTIN_ENABLED,	
   const_cast<char* const*>(llm_doc),		
-  const_cast<char*>("llm [-i] [-n] [-r] [-h] [-c] [-H] [-m model] [message...]"),		
+  const_cast<char*>("llm [-i] [-n] [-r] [-h] [-c] [-H] [-l] [-m model] [message...]"),		
   0			
 };
 

@@ -69,6 +69,12 @@ public:
      * @param model_name The model name to use
      */
     virtual void set_model(const std::string& model_name) = 0;
+    
+    /**
+     * Get a list of available models for this provider.
+     * @return Vector of model names
+     */
+    virtual std::vector<std::string> get_available_models() const = 0;
 };
 
 #endif /* LLM_PROVIDER_H */

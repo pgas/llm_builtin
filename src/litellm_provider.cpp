@@ -56,6 +56,68 @@ void LiteLLMProvider::set_model(const std::string& model_name) {
     model_name_ = model_name;
 }
 
+std::vector<std::string> LiteLLMProvider::get_available_models() const {
+    std::vector<std::string> models;
+    
+    // Query the /v1/models endpoint
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        std::cerr << "Error: Failed to initialize CURL\n";
+        return models;
+    }
+    
+    ResponseData resp;
+    std::string url = base_url_ + "/v1/models";
+    
+    struct curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    
+    if (!api_token_.empty()) {
+        std::string auth_header = "Authorization: Bearer " + api_token_;
+        headers = curl_slist_append(headers, auth_header.c_str());
+    }
+    
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+    
+    CURLcode res = curl_easy_perform(curl);
+    
+    if (res != CURLE_OK) {
+        std::cerr << "Error: Failed to fetch models: " << curl_easy_strerror(res) << "\n";
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+        return models;
+    }
+    
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    
+    if (http_code != 200) {
+        std::cerr << "Error: HTTP " << http_code << " while fetching models\n";
+        return models;
+    }
+    
+    try {
+        json response = json::parse(resp.data);
+        if (response.contains("data") && response["data"].is_array()) {
+            for (const auto& model_obj : response["data"]) {
+                if (model_obj.contains("id") && model_obj["id"].is_string()) {
+                    models.push_back(model_obj["id"].get<std::string>());
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error: Failed to parse models response: " << e.what() << "\n";
+    }
+    
+    return models;
+}
+
 std::string LiteLLMProvider::get_llm_dir_path() {
   const char *home = getenv("HOME");
   if (!home) {

@@ -28,6 +28,7 @@ public:
     std::string get_provider_name() const override;
     std::string get_model_name() const override;
     void set_model(const std::string& model_name);
+    std::vector<std::string> get_available_models() const override;
 
 private:
     // Credential management
