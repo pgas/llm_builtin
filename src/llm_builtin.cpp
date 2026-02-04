@@ -56,8 +56,12 @@ static std::unique_ptr<LLMProvider> g_provider;
 // In-memory chat history for the current shell session
 static std::vector<json> g_chat_history;
 
-// Get the last N entries from bash history
-static std::vector<std::string> get_bash_history(int limit = 10) {
+// Whether to include bash history in context (from config)
+static bool g_include_history = false;
+
+// Get the last N entries from bash history, filtered and numbered
+// Returns formatted strings like "1: ls -la" where higher numbers = more recent
+static std::vector<std::string> get_bash_history(int limit = 20) {
   std::vector<std::string> history_entries;
   
   HIST_ENTRY **hlist = history_list();
@@ -70,13 +74,25 @@ static std::vector<std::string> get_bash_history(int limit = 10) {
     total++;
   }
   
-  limit += 1; // last command is llm itself, skip it
-  int start_idx = (total > limit) ? (total - limit) : 0;
-  
-  for (int i = start_idx; i < total-1; i++) {
+  // Collect commands in reverse order (most recent first), filtering out llm commands
+  std::vector<std::string> filtered_commands;
+  for (int i = total - 1; i >= 0 && filtered_commands.size() < static_cast<size_t>(limit); i--) {
     if (hlist[i] && hlist[i]->line) {
-      history_entries.push_back(std::string(hlist[i]->line));
+      std::string cmd(hlist[i]->line);
+      // Skip commands that start with "llm"
+      if (cmd.compare(0, 3, "llm") == 0 && (cmd.length() == 3 || cmd[3] == ' ')) {
+        continue;
+      }
+      filtered_commands.push_back(cmd);
     }
+  }
+  
+  // Number them so most recent has highest number, and display in chronological order
+  // (oldest first, newest last) so the highest number visually appears at the end
+  int num = 1;
+  for (auto it = filtered_commands.rbegin(); it != filtered_commands.rend(); ++it) {
+    history_entries.push_back(std::to_string(num) + ": " + *it);
+    num++;
   }
   
   return history_entries;
@@ -203,6 +219,10 @@ static bool load_config() {
       if (config_data.contains("provider")) {
         provider_name = config_data["provider"].get<std::string>();
       }
+      
+      if (config_data.contains("include_history")) {
+        g_include_history = config_data["include_history"].get<bool>();
+      }
     } catch (const std::exception& e) {
       std::cerr << "Warning: Failed to parse config file: " << e.what() << "\n";
       std::cerr << "Using default provider (copilot)\n";
@@ -271,6 +291,7 @@ static void ensure_instructions_file() {
   file << "- Prefer one-liners and pipelines when appropriate\n";
   file << "- Include safety warnings for destructive operations\n";
   file << "- Assume Linux/Unix environment unless specified otherwise\n";
+  file << "- Limit the response to what can appear in a terminal window 80 cols x 20 rows, and offer the user to give more explanation if needed\n";
   file.close();
 
   chmod(instructions_file.c_str(), 0600);
@@ -340,24 +361,31 @@ static json get_predefined_tools() {
 }
 
 // Send a chat message using the LLM provider
-static int send_chat_message(const std::string& message) {
+static int send_chat_message(const std::string& message, bool include_history_override = false) {
   if (!g_provider) {
     std::cerr << "Error: LLM provider not initialized\n";
     return EXECUTION_FAILURE;
   }
   
   std::string instructions = load_instructions();
-  
-  // Append bash history context to system message
   std::string system_message = instructions;
-  std::vector<std::string> bash_history = get_bash_history(10);
-  if (!bash_history.empty()) {
-    if (!system_message.empty()) {
-      system_message += "\n\n";
-    }
-    system_message += "Recent shell commands:\n";
-    for (const auto& cmd : bash_history) {
-      system_message += "  " + cmd + "\n";
+  
+  // Build user message with optional history context
+  std::string user_message = message;
+  bool should_include_history = include_history_override || g_include_history;
+  
+  if (should_include_history) {
+    std::vector<std::string> bash_history = get_bash_history(20);
+    if (!bash_history.empty()) {
+      std::string history_context = "\n\n=== RECENT SHELL COMMAND HISTORY ===\n";
+      history_context += "Commands are numbered from OLDEST to NEWEST.\n";
+      history_context += "THE HIGHEST NUMBER IS THE MOST RECENT COMMAND.\n";
+      history_context += "When I say \"last command\" or \"this command\", I mean the HIGHEST numbered command below.\n\n";
+      history_context += "Unless explicitely asked to, one and only one command, usually the last one should be considered.\n\n";
+      for (const auto& cmd : bash_history) {
+        history_context += cmd + "\n";
+      }
+      user_message = history_context + "\n" + message;
     }
   }
   
@@ -366,7 +394,7 @@ static int send_chat_message(const std::string& message) {
   
   std::string response;
   json tool_calls;
-  if (!g_provider->send_message(message, g_chat_history, system_message, tools, response, &tool_calls)) {
+  if (!g_provider->send_message(user_message, g_chat_history, system_message, tools, response, &tool_calls)) {
     return EXECUTION_FAILURE;
   }
   
@@ -488,7 +516,7 @@ static int send_chat_message(const std::string& message) {
 }
 
 // Interactive chat mode
-static int interactive_chat(bool is_tty) {
+static int interactive_chat(bool is_tty, bool force_history = false) {
   const char *cyan = "\033[36m";
   const char *green = "\033[32m";
   const char *yellow = "\033[33m";
@@ -550,7 +578,7 @@ static int interactive_chat(bool is_tty) {
       continue;
     }
     
-    if (send_chat_message(message) != EXECUTION_SUCCESS) {
+    if (send_chat_message(message, force_history) != EXECUTION_SUCCESS) {
       std::cerr << "Failed to send message\n";
     }
   }
@@ -559,7 +587,7 @@ static int interactive_chat(bool is_tty) {
 }
 
 // Non-tty interactive mode: read each stdin line as a prompt
-static int interactive_chat_pipe() {
+static int interactive_chat_pipe(bool force_history = false) {
   std::ifstream input("/dev/stdin");
   std::string message;
   while (std::getline(input, message)) {
@@ -567,7 +595,7 @@ static int interactive_chat_pipe() {
     if (message.empty()) {
       continue;
     }
-    if (send_chat_message(message) != EXECUTION_SUCCESS) {
+    if (send_chat_message(message, force_history) != EXECUTION_SUCCESS) {
       std::cerr << "Failed to send message\n";
     }
   }
@@ -601,9 +629,10 @@ llm_builtin (WORD_LIST *list)
   int reload = 0;
   int show_help = 0;
   int completion_mode = 0;
+  int force_history = 0;
   std::string message;
   std::string model_override;
-  const char *opt_string = "inrhcm:";
+  const char *opt_string = "inrhcm:H";
   
   reset_internal_getopt();
   while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
@@ -625,6 +654,9 @@ llm_builtin (WORD_LIST *list)
         break;
       case 'm':
         model_override = list_optarg;
+        break;
+      case 'H':
+        force_history = 1;
         break;
       CASE_HELPOPT;
       default:
@@ -667,12 +699,13 @@ llm_builtin (WORD_LIST *list)
     std::cout << "Current Configuration:\n";
     std::cout << "  Provider: " << cyan << g_provider->get_provider_name() << reset << "\n";
     std::cout << "  Model: " << cyan << g_provider->get_model_name() << reset << "\n\n";
-    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [-c] [-m model] [message...]\n\n";
+    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [-c] [-H] [-m model] [message...]\n\n";
     std::cout << bold << "Options:" << reset << "\n";
     std::cout << "  -i          Interactive chat mode\n";
     std::cout << "  -n          Start a new chat (clear conversation history)\n";
     std::cout << "  -r          Reload configuration from ~/.bash_llm/config.json\n";
     std::cout << "  -c          Completion mode (for use with bind -x)\n";
+    std::cout << "  -H          Include bash command history in context\n";
     std::cout << "  -m model    Override the model for this session\n";
     std::cout << "  -h          Show this help with current configuration\n\n";
     std::cout << bold << "Examples:" << reset << "\n";
@@ -694,10 +727,10 @@ llm_builtin (WORD_LIST *list)
   }
   
   if (is_tty && (interactive || list == nullptr)) {
-       return interactive_chat(true);
+       return interactive_chat(true, force_history);
   }
   if (interactive) {
-    return interactive_chat_pipe();
+    return interactive_chat_pipe(force_history);
   }
   
   // Collect all arguments as the message
@@ -721,7 +754,7 @@ llm_builtin (WORD_LIST *list)
 
   message = ss.str();
   
-  return send_chat_message(message);
+  return send_chat_message(message, force_history);
 }
 
 int
@@ -747,13 +780,14 @@ llm_builtin_unload (char *s)
 const char *llm_doc[] = {
   "Chat with LLM provider (GitHub Copilot or LiteLLM).",
   "",
-  "Usage: llm [-i] [-n] [-r] [-h] [-c] [-m model] [message...]",
+  "Usage: llm [-i] [-n] [-r] [-h] [-c] [-H] [-m model] [message...]",
   "",
   "Options:",
   "  -i          Interactive chat mode",
   "  -n          Start a new chat (clear conversation history)",
   "  -r          Reload configuration from ~/.bash_llm/config.json",
   "  -c          Completion mode (for use with bind -x)",
+  "  -H          Include bash command history in context",
   "  -m model    Override the model for this session",
   "  -h          Show help with current provider and model",
   "",
@@ -790,7 +824,7 @@ struct builtin llm_struct __attribute__((visibility("default"))) = {
   llm_builtin,		
   BUILTIN_ENABLED,	
   const_cast<char* const*>(llm_doc),		
-  const_cast<char*>("llm [-i] [-n] [-r] [-h] [-c] [-m model] [message...]"),		
+  const_cast<char*>("llm [-i] [-n] [-r] [-h] [-c] [-H] [-m model] [message...]"),		
   0			
 };
 
