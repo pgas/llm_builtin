@@ -32,6 +32,7 @@ extern "C" {
 #include "shell.h"
 #include "bashgetopt.h"
 #include "common.h"
+#include "variables.h"
 
 // Forward declarations from readline/history.h
 typedef struct _hist_entry {
@@ -98,6 +99,93 @@ static std::string get_instructions_file_path() {
 // Get path to config file
 static std::string get_config_file_path() {
   return get_llm_dir_path() + "/config.json";
+}
+
+// Handle readline completion
+static int handle_completion() {
+  // Get the current readline line and cursor position
+  SHELL_VAR *readline_line_var = find_variable("READLINE_LINE");
+  SHELL_VAR *readline_point_var = find_variable("READLINE_POINT");
+  
+  if (!readline_line_var || !readline_line_var->value) {
+    builtin_error("READLINE_LINE not set - use with bind -x");
+    return EXECUTION_FAILURE;
+  }
+  
+  std::string current_line = readline_line_var->value;
+  int cursor_pos = 0;
+  
+  if (readline_point_var && readline_point_var->value) {
+    cursor_pos = atoi(readline_point_var->value);
+  }
+  
+  // Build prompt for completion
+  std::string message = "Complete this bash command line. Only provide the completed command, no explanations:\n\n";
+  message += current_line;
+  
+  if (!g_provider) {
+    builtin_error("No provider initialized");
+    return EXECUTION_FAILURE;
+  }
+  
+  try {
+    // Create a simple system message for completion
+    std::string system_message = "You are a helpful bash command completion assistant. When given a partial command, complete it logically. Return ONLY the completed command with no explanation or formatting.";
+    
+    // Empty history for one-shot completion
+    std::vector<json> empty_history;
+    
+    // No tools needed for completion
+    json empty_tools = json::object();
+    
+    std::string response;
+    if (!g_provider->send_message(message, empty_history, system_message, empty_tools, response)) {
+      builtin_error("Failed to get completion from provider");
+      return EXECUTION_FAILURE;
+    }
+    
+    // Clean up the completion - remove leading/trailing whitespace and newlines
+    size_t start = response.find_first_not_of(" \t\n\r");
+    size_t end = response.find_last_not_of(" \t\n\r");
+    if (start != std::string::npos && end != std::string::npos) {
+      response = response.substr(start, end - start + 1);
+    }
+    
+    // If completion starts with backticks or code fence, try to extract just the code
+    if (response.find("```") != std::string::npos) {
+      size_t code_start = response.find("```");
+      code_start = response.find("\n", code_start);
+      if (code_start != std::string::npos) {
+        size_t code_end = response.find("```", code_start);
+        if (code_end != std::string::npos) {
+          response = response.substr(code_start + 1, code_end - code_start - 1);
+          // Trim again
+          start = response.find_first_not_of(" \t\n\r");
+          end = response.find_last_not_of(" \t\n\r");
+          if (start != std::string::npos && end != std::string::npos) {
+            response = response.substr(start, end - start + 1);
+          }
+        }
+      }
+    }
+    
+    // Update READLINE_LINE with the completion
+    // bind_variable expects char* not const char*, so we need to copy the string
+    char *completion_str = strdup(response.c_str());
+    bind_variable("READLINE_LINE", completion_str, 0);
+    free(completion_str);
+    
+    // Set cursor to end of line
+    char point_str[32];
+    snprintf(point_str, sizeof(point_str), "%zu", response.length());
+    bind_variable("READLINE_POINT", point_str, 0);
+    
+    return EXECUTION_SUCCESS;
+    
+  } catch (const std::exception& e) {
+    builtin_error("Completion failed: %s", e.what());
+    return EXECUTION_FAILURE;
+  }
 }
 
 // Load configuration from JSON file
@@ -512,9 +600,10 @@ llm_builtin (WORD_LIST *list)
   int new_chat = 0;
   int reload = 0;
   int show_help = 0;
+  int completion_mode = 0;
   std::string message;
   std::string model_override;
-  const char *opt_string = "inrhm:";
+  const char *opt_string = "inrhcm:";
   
   reset_internal_getopt();
   while ((opt = internal_getopt(list, const_cast<char*>(opt_string))) != -1) {
@@ -530,6 +619,9 @@ llm_builtin (WORD_LIST *list)
         break;
       case 'h':
         show_help = 1;
+        break;
+      case 'c':
+        completion_mode = 1;
         break;
       case 'm':
         model_override = list_optarg;
@@ -551,6 +643,11 @@ llm_builtin (WORD_LIST *list)
     return EXECUTION_SUCCESS;
   }
   
+  // Handle completion mode for use with bind -x
+  if (completion_mode) {
+    return handle_completion();
+  }
+  
   // Apply model override if specified
   if (!model_override.empty()) {
     g_provider->set_model(model_override);
@@ -570,11 +667,12 @@ llm_builtin (WORD_LIST *list)
     std::cout << "Current Configuration:\n";
     std::cout << "  Provider: " << cyan << g_provider->get_provider_name() << reset << "\n";
     std::cout << "  Model: " << cyan << g_provider->get_model_name() << reset << "\n\n";
-    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [-m model] [message...]\n\n";
+    std::cout << bold << "Usage:" << reset << " llm [-i] [-n] [-r] [-h] [-c] [-m model] [message...]\n\n";
     std::cout << bold << "Options:" << reset << "\n";
     std::cout << "  -i          Interactive chat mode\n";
     std::cout << "  -n          Start a new chat (clear conversation history)\n";
     std::cout << "  -r          Reload configuration from ~/.bash_llm/config.json\n";
+    std::cout << "  -c          Completion mode (for use with bind -x)\n";
     std::cout << "  -m model    Override the model for this session\n";
     std::cout << "  -h          Show this help with current configuration\n\n";
     std::cout << bold << "Examples:" << reset << "\n";
@@ -583,6 +681,8 @@ llm_builtin (WORD_LIST *list)
     std::cout << "  llm -m gpt-4o-mini  # Use a specific model\n";
     std::cout << "  llm -h              # Show this help\n";
     std::cout << "  llm -r              # Reload configuration\n\n";
+    std::cout << bold << "Readline Completion:" << reset << "\n";
+    std::cout << "  bind -x '\"\\C-o\": llm -c'   # Bind Ctrl-O to complete current line\n\n";
     std::cout << bold << "Configuration:" << reset << "\n";
     std::cout << "  Edit ~/.bash_llm/config.json to change provider\n";
     std::cout << "  Example: {\"provider\": \"copilot\"} or {\"provider\": \"litellm\"}\n";
@@ -647,12 +747,13 @@ llm_builtin_unload (char *s)
 const char *llm_doc[] = {
   "Chat with LLM provider (GitHub Copilot or LiteLLM).",
   "",
-  "Usage: llm [-i] [-n] [-r] [-h] [-m model] [message...]",
+  "Usage: llm [-i] [-n] [-r] [-h] [-c] [-m model] [message...]",
   "",
   "Options:",
   "  -i          Interactive chat mode",
   "  -n          Start a new chat (clear conversation history)",
   "  -r          Reload configuration from ~/.bash_llm/config.json",
+  "  -c          Completion mode (for use with bind -x)",
   "  -m model    Override the model for this session",
   "  -h          Show help with current provider and model",
   "",
@@ -671,6 +772,11 @@ const char *llm_doc[] = {
   "  /exit, /quit  Exit interactive mode",
   "  Note: Partial matches work (e.g., /q for /quit, /h for /help)",
   "",
+  "Readline Completion:",
+  "  bind -x '\"\\C-o\": llm -c'   # Bind Ctrl-O to complete current line",
+  "  The -c option reads READLINE_LINE, sends it to the LLM for completion,",
+  "  and updates READLINE_LINE with the result. Works with any key binding.",
+  "",
   "Configuration:",
   "  Edit ~/.bash_llm/config.json to change provider and default model.",
   "  Example: {\"provider\": \"copilot\", \"copilot\": {\"model\": \"gpt-4o\"}}",
@@ -684,7 +790,7 @@ struct builtin llm_struct __attribute__((visibility("default"))) = {
   llm_builtin,		
   BUILTIN_ENABLED,	
   const_cast<char* const*>(llm_doc),		
-  const_cast<char*>("llm [-i] [-n] [-r] [-h] [-m model] [message...]"),		
+  const_cast<char*>("llm [-i] [-n] [-r] [-h] [-c] [-m model] [message...]"),		
   0			
 };
 

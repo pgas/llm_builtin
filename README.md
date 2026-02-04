@@ -6,6 +6,15 @@ Supported providers:
 - **GitHub Copilot** (default) - Requires GitHub Copilot subscription
 - **LiteLLM** - Local LLM gateway/proxy
 
+## Features
+
+- 🤖 Chat with LLMs directly from bash
+- ⌨️ **Readline completion** - Press a key to complete your command with AI (NEW!)
+- 💬 Interactive chat mode
+- 📝 Custom instructions support
+- 🔧 Multiple provider support
+- 🎯 Model selection
+
 (Written with the help of an llms)
 
 ## Quick Start
@@ -64,6 +73,7 @@ Options:
   -i    Start interactive chat mode
   -n    Start a new chat (clear conversation history)
   -r    Reload configuration from ~/.bash_llm/config.json
+  -c    Completion mode (for use with bind -x)
   -m    Override the model for this session
   -h    Show help with current provider and model
 
@@ -80,6 +90,25 @@ Examples:
   
   # Interactive mode with piped input (each line becomes a separate prompt)
   echo -e "What is 2+2?\nWhat is 3+3?" | llm -i
+```
+
+## Readline Completion (NEW!)
+
+Bind a key to get AI-powered command completion:
+
+```bash
+# Add to your ~/.bashrc
+bind -x '"\C-o": llm -c'
+```
+
+Now type a partial command and press **Ctrl-O** to complete it:
+
+```bash
+$ find . -name <Ctrl-O>
+$ find . -name "*.txt" -type f  # ← AI completes the command!
+```
+
+See [READLINE_COMPLETION.md](READLINE_COMPLETION.md) for full documentation.
 
 ## Custom Instructions
 
